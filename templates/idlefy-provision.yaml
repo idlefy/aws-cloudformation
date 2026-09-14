@@ -1,0 +1,281 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Idlefy provision role (template __TEMPLATE_VERSION__). Opt-in: lets Idlefy create dev boxes
+  for your organization. Every resource Idlefy creates must carry the tag IdlefyManaged=true,
+  and Idlefy can only change or delete resources that carry it. Regions, instance types and
+  volume size are limited to the values you set below. Delete this stack to revoke provisioning;
+  the manage role keeps working.
+
+Metadata:
+  Idlefy:
+    TemplateVersion: __TEMPLATE_VERSION__
+    Repository: https://github.com/idlefy/aws-cloudformation
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: { default: Idlefy }
+        Parameters: [OrgId, IssuerHost]
+      - Label: { default: Limits }
+        Parameters: [AllowedRegions, AllowedInstanceTypes, MaxVolumeGiB]
+    ParameterLabels:
+      OrgId: { default: Idlefy organization ID }
+      IssuerHost: { default: Idlefy OIDC issuer host }
+      AllowedRegions: { default: Regions where Idlefy may create dev boxes }
+      AllowedInstanceTypes: { default: Instance types Idlefy may launch }
+      MaxVolumeGiB: { default: Largest root volume Idlefy may create (GiB) }
+
+Parameters:
+  OrgId:
+    Type: String
+    Description: Your Idlefy organization ID (UUID). Prefilled by Idlefy; do not change.
+    AllowedPattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+    ConstraintDescription: must be a lowercase UUID
+  IssuerHost:
+    Type: String
+    Description: Host of the Idlefy OIDC issuer without https:// (app.idlefy.com). Prefilled by Idlefy; do not change.
+    AllowedPattern: ^[a-z0-9.-]+(/[A-Za-z0-9._-]+)*$
+    MinLength: 3
+  AllowedRegions:
+    Type: CommaDelimitedList
+    Description: Comma-separated AWS regions, e.g. eu-central-1,us-east-1. Idlefy cannot touch EC2 anywhere else.
+  AllowedInstanceTypes:
+    Type: CommaDelimitedList
+    Description: Comma-separated instance types Idlefy may launch, e.g. m7i.large,m7i.xlarge,g6.xlarge.
+  MaxVolumeGiB:
+    Type: Number
+    Default: 1024
+    MinValue: 8
+    MaxValue: 16384
+    Description: Upper bound for any EBS volume Idlefy creates.
+
+Resources:
+  ProvisionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub
+        - IdlefyProvisionPolicy-${Suffix}
+        - Suffix: !Join ["", [!Select [0, !Split ["-", !Ref OrgId]], !Select [1, !Split ["-", !Ref OrgId]]]]
+      Description: Fence for the Idlefy provision role - tag-scoped create/mutate, allowlisted regions and instance types.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: Describe
+            Effect: Allow
+            Action:
+              - ec2:Describe*
+              - ec2:GetConsoleOutput
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref AllowedRegions
+
+          - Sid: DescribeGlobal
+            Effect: Allow
+            Action:
+              - servicequotas:GetServiceQuota
+              - servicequotas:ListServiceQuotas
+              - pricing:GetProducts
+            Resource: "*"
+
+          - Sid: UbuntuAmiLookup
+            Effect: Allow
+            Action:
+              - ssm:GetParameter
+              - ssm:GetParameters
+            Resource: arn:aws:ssm:*::parameter/aws/service/canonical/ubuntu/*
+
+          - Sid: CreateTagged
+            Effect: Allow
+            Action:
+              - ec2:CreateVpc
+              - ec2:CreateSubnet
+              - ec2:CreateInternetGateway
+              - ec2:CreateRouteTable
+              - ec2:CreateSecurityGroup
+              - ec2:AllocateAddress
+              - ec2:CreateVolume
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:RequestTag/IdlefyManaged: "true"
+                aws:RequestedRegion: !Ref AllowedRegions
+
+          - Sid: CreateInManagedVpc
+            Effect: Allow
+            Action:
+              - ec2:CreateSubnet
+              - ec2:CreateSecurityGroup
+              - ec2:CreateRouteTable
+            Resource: arn:aws:ec2:*:*:vpc/*
+            Condition:
+              StringEquals:
+                ec2:ResourceTag/IdlefyManaged: "true"
+
+          - Sid: RunInstancesInstance
+            Effect: Allow
+            Action: ec2:RunInstances
+            Resource: arn:aws:ec2:*:*:instance/*
+            Condition:
+              StringEquals:
+                aws:RequestTag/IdlefyManaged: "true"
+                aws:RequestedRegion: !Ref AllowedRegions
+                ec2:InstanceType: !Ref AllowedInstanceTypes
+
+          - Sid: RunInstancesVolume
+            Effect: Allow
+            Action: ec2:RunInstances
+            Resource: arn:aws:ec2:*:*:volume/*
+            Condition:
+              StringEquals:
+                aws:RequestTag/IdlefyManaged: "true"
+                aws:RequestedRegion: !Ref AllowedRegions
+              NumericLessThanEquals:
+                ec2:VolumeSize: !Ref MaxVolumeGiB
+
+          - Sid: RunInstancesManagedNetwork
+            Effect: Allow
+            Action: ec2:RunInstances
+            Resource:
+              - arn:aws:ec2:*:*:subnet/*
+              - arn:aws:ec2:*:*:security-group/*
+              - arn:aws:ec2:*:*:network-interface/*
+            Condition:
+              StringEquals:
+                ec2:ResourceTag/IdlefyManaged: "true"
+
+          - Sid: RunInstancesImage
+            Effect: Allow
+            Action: ec2:RunInstances
+            Resource: arn:aws:ec2:*::image/*
+            Condition:
+              StringEquals:
+                ec2:Owner:
+                  - "099720109477"
+                  - amazon
+
+          - Sid: RunInstancesKeyPair
+            Effect: Allow
+            Action: ec2:RunInstances
+            Resource: arn:aws:ec2:*:*:key-pair/*
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref AllowedRegions
+
+          - Sid: CreateTagsOnCreate
+            Effect: Allow
+            Action: ec2:CreateTags
+            Resource: "*"
+            Condition:
+              StringEquals:
+                ec2:CreateAction:
+                  - RunInstances
+                  - CreateVpc
+                  - CreateSubnet
+                  - CreateInternetGateway
+                  - CreateRouteTable
+                  - CreateSecurityGroup
+                  - AllocateAddress
+                  - CreateVolume
+
+          - Sid: MutateManaged
+            Effect: Allow
+            Action:
+              - ec2:TerminateInstances
+              - ec2:StopInstances
+              - ec2:StartInstances
+              - ec2:RebootInstances
+              - ec2:DeleteVpc
+              - ec2:ModifyVpcAttribute
+              - ec2:DeleteSubnet
+              - ec2:ModifySubnetAttribute
+              - ec2:DeleteInternetGateway
+              - ec2:AttachInternetGateway
+              - ec2:DetachInternetGateway
+              - ec2:DeleteRouteTable
+              - ec2:CreateRoute
+              - ec2:DeleteRoute
+              - ec2:AssociateRouteTable
+              - ec2:DisassociateRouteTable
+              - ec2:DeleteSecurityGroup
+              - ec2:AuthorizeSecurityGroupIngress
+              - ec2:RevokeSecurityGroupIngress
+              - ec2:AuthorizeSecurityGroupEgress
+              - ec2:RevokeSecurityGroupEgress
+              - ec2:AssociateAddress
+              - ec2:DisassociateAddress
+              - ec2:ReleaseAddress
+              - ec2:DeleteVolume
+            Resource: "*"
+            Condition:
+              StringEquals:
+                ec2:ResourceTag/IdlefyManaged: "true"
+
+          - Sid: InstanceConnect
+            Effect: Allow
+            Action: ec2-instance-connect:SendSSHPublicKey
+            Resource: arn:aws:ec2:*:*:instance/*
+            Condition:
+              StringEquals:
+                ec2:ResourceTag/IdlefyManaged: "true"
+
+          - Sid: DenyEscalation
+            Effect: Deny
+            Action:
+              - iam:PassRole
+              - ec2:AssociateIamInstanceProfile
+              - ec2:ReplaceIamInstanceProfileAssociation
+              - ec2:ModifyInstanceAttribute
+              - ec2:DeleteTags
+              - sts:*
+              - organizations:*
+            Resource: "*"
+
+          - Sid: DenyOutsideAllowedRegions
+            Effect: Deny
+            Action:
+              - ec2:*
+              - ec2-instance-connect:*
+            Resource: "*"
+            Condition:
+              StringNotEquals:
+                aws:RequestedRegion: !Ref AllowedRegions
+
+  ProvisionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub
+        - IdlefyProvision-${Suffix}
+        - Suffix: !Join ["", [!Select [0, !Split ["-", !Ref OrgId]], !Select [1, !Split ["-", !Ref OrgId]]]]
+      Description: Idlefy provision tier - creates dev boxes tagged IdlefyManaged=true within the configured limits.
+      MaxSessionDuration: 3600
+      ManagedPolicyArns:
+        - !Ref ProvisionPolicy
+      PermissionsBoundary: !Ref ProvisionPolicy
+      AssumeRolePolicyDocument: !Sub |
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": { "Federated": "arn:aws:iam::${AWS::AccountId}:oidc-provider/${IssuerHost}" },
+              "Action": "sts:AssumeRoleWithWebIdentity",
+              "Condition": {
+                "StringEquals": {
+                  "${IssuerHost}:aud": "sts.amazonaws.com",
+                  "${IssuerHost}:sub": "${OrgId}:provision"
+                }
+              }
+            }
+          ]
+        }
+      Tags:
+        - { Key: Idlefy, Value: provision }
+        - { Key: IdlefyOrg, Value: !Ref OrgId }
+        - { Key: IdlefyTemplateVersion, Value: __TEMPLATE_VERSION__ }
+
+Outputs:
+  RoleArn:
+    Description: Provision role Idlefy assumes for this organization (Idlefy derives it; nothing to copy).
+    Value: !GetAtt ProvisionRole.Arn
+  PolicyArn:
+    Description: The fence policy, attached to the role and set as its permissions boundary.
+    Value: !Ref ProvisionPolicy

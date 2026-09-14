@@ -1,0 +1,55 @@
+name: publish
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  BUCKET: idlefy-cfn-templates
+  ROLE_ARN: arn:aws:iam::995603458290:role/github-cfn-publish
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - run: cfn-lint templates/*.yaml
+      - run: pytest -q
+
+      - name: Stamp the version into the templates
+        run: |
+          mkdir -p dist
+          for f in templates/*.yaml; do
+            sed "s/__TEMPLATE_VERSION__/${GITHUB_REF_NAME}/g" "$f" > "dist/$(basename "$f")"
+          done
+          cfn-lint dist/*.yaml
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Upload to cfn/<tag>/ and cfn/latest/
+        run: |
+          for prefix in "cfn/${GITHUB_REF_NAME}" "cfn/latest"; do
+            aws s3 cp dist/ "s3://${BUCKET}/${prefix}/" --recursive \
+              --content-type text/yaml --cache-control max-age=300
+          done
+
+      - name: Verify anonymous access
+        run: |
+          for f in dist/*.yaml; do
+            url="https://${BUCKET}.s3.us-east-1.amazonaws.com/cfn/${GITHUB_REF_NAME}/$(basename "$f")"
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$url")
+            echo "$code $url"
+            test "$code" = "200"
+          done

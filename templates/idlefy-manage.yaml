@@ -1,0 +1,153 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Idlefy manage role (template __TEMPLATE_VERSION__). Lets Idlefy discover and start/stop
+  the EC2 instances you tag with Idlefy=enabled. It cannot create, terminate or resize anything.
+  Access is granted only to short-lived web-identity tokens issued by Idlefy for your organization.
+
+Metadata:
+  Idlefy:
+    TemplateVersion: __TEMPLATE_VERSION__
+    Repository: https://github.com/idlefy/aws-cloudformation
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: { default: Idlefy }
+        Parameters: [OrgId, IssuerHost]
+      - Label: { default: Options }
+        Parameters: [CreateOidcProvider, IncludeMetrics]
+    ParameterLabels:
+      OrgId: { default: Idlefy organization ID }
+      IssuerHost: { default: Idlefy OIDC issuer host }
+      CreateOidcProvider: { default: Create the OIDC identity provider }
+      IncludeMetrics: { default: Allow CloudWatch metrics (Smart Protection) }
+
+Parameters:
+  OrgId:
+    Type: String
+    Description: Your Idlefy organization ID (UUID). Prefilled by Idlefy; do not change.
+    AllowedPattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+    ConstraintDescription: must be a lowercase UUID
+  IssuerHost:
+    Type: String
+    Description: Host of the Idlefy OIDC issuer without https:// (app.idlefy.com). Prefilled by Idlefy; do not change.
+    AllowedPattern: ^[a-z0-9.-]+(/[A-Za-z0-9._-]+)*$
+    MinLength: 3
+  CreateOidcProvider:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Set to false if this AWS account already has the Idlefy OIDC provider (another Idlefy
+      organization or a manual setup). Stack error "EntityAlreadyExists" means set false;
+      "Invalid principal in policy" means set true.
+  IncludeMetrics:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Allow cloudwatch:GetMetricData and ListMetrics so Idlefy can see CPU/network activity before stopping a VM.
+
+Conditions:
+  CreateProvider: !Equals [!Ref CreateOidcProvider, "true"]
+  WithMetrics: !Equals [!Ref IncludeMetrics, "true"]
+
+Resources:
+  OidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateProvider
+    Properties:
+      Url: !Sub https://${IssuerHost}
+      ClientIdList: [sts.amazonaws.com]
+      Tags:
+        - { Key: Idlefy, Value: oidc }
+
+  ManageRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub
+        - IdlefyManage-${Suffix}
+        - Suffix: !Join ["", [!Select [0, !Split ["-", !Ref OrgId]], !Select [1, !Split ["-", !Ref OrgId]]]]
+      Description: Idlefy manage tier - discover and start/stop instances tagged Idlefy=enabled.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument: !Sub
+        - |
+          {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Principal": { "Federated": "${ProviderArn}" },
+                "Action": "sts:AssumeRoleWithWebIdentity",
+                "Condition": {
+                  "StringEquals": {
+                    "${IssuerHost}:aud": "sts.amazonaws.com",
+                    "${IssuerHost}:sub": "${OrgId}"
+                  }
+                }
+              }
+            ]
+          }
+        - ProviderArn: !If
+            - CreateProvider
+            - !Ref OidcProvider
+            - !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/${IssuerHost}
+      Policies:
+        - PolicyName: IdlefyPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: IdlefyCore
+                Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ec2:DescribeTags
+                  - ec2:DescribeInstanceTypes
+                  - ec2:DescribeRegions
+                Resource: "*"
+              - Sid: IdlefyVMManagementLower
+                Effect: Allow
+                Action:
+                  - ec2:StartInstances
+                  - ec2:StopInstances
+                  - ec2:RebootInstances
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    ec2:ResourceTag/idlefy: enabled
+              - Sid: IdlefyVMManagementUpper
+                Effect: Allow
+                Action:
+                  - ec2:StartInstances
+                  - ec2:StopInstances
+                  - ec2:RebootInstances
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    ec2:ResourceTag/Idlefy: enabled
+              - Sid: IdlefyPricing
+                Effect: Allow
+                Action:
+                  - pricing:GetProducts
+                Resource: "*"
+              - !If
+                - WithMetrics
+                - Sid: IdlefyMetrics
+                  Effect: Allow
+                  Action:
+                    - cloudwatch:GetMetricData
+                    - cloudwatch:ListMetrics
+                  Resource: "*"
+                - !Ref AWS::NoValue
+      Tags:
+        - { Key: Idlefy, Value: manage }
+        - { Key: IdlefyOrg, Value: !Ref OrgId }
+        - { Key: IdlefyTemplateVersion, Value: __TEMPLATE_VERSION__ }
+
+Outputs:
+  RoleArn:
+    Description: Role Idlefy assumes for this organization (Idlefy derives it; nothing to copy).
+    Value: !GetAtt ManageRole.Arn
+  OidcProviderArn:
+    Description: OIDC identity provider used by the trust policy.
+    Value: !If
+      - CreateProvider
+      - !Ref OidcProvider
+      - !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/${IssuerHost}

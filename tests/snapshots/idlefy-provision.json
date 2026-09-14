@@ -1,0 +1,279 @@
+{
+  "ProvisionPolicy.PolicyDocument": {
+    "Statement": [
+      {
+        "Action": [
+          "ec2:Describe*",
+          "ec2:GetConsoleOutput"
+        ],
+        "Condition": {
+          "StringEquals": {
+            "aws:RequestedRegion": [
+              "eu-central-1",
+              "us-east-1"
+            ]
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "Describe"
+      },
+      {
+        "Action": [
+          "servicequotas:GetServiceQuota",
+          "servicequotas:ListServiceQuotas",
+          "pricing:GetProducts"
+        ],
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "DescribeGlobal"
+      },
+      {
+        "Action": [
+          "ssm:GetParameter",
+          "ssm:GetParameters"
+        ],
+        "Effect": "Allow",
+        "Resource": "arn:aws:ssm:*::parameter/aws/service/canonical/ubuntu/*",
+        "Sid": "UbuntuAmiLookup"
+      },
+      {
+        "Action": [
+          "ec2:CreateVpc",
+          "ec2:CreateSubnet",
+          "ec2:CreateInternetGateway",
+          "ec2:CreateRouteTable",
+          "ec2:CreateSecurityGroup",
+          "ec2:AllocateAddress",
+          "ec2:CreateVolume"
+        ],
+        "Condition": {
+          "StringEquals": {
+            "aws:RequestTag/IdlefyManaged": "true",
+            "aws:RequestedRegion": [
+              "eu-central-1",
+              "us-east-1"
+            ]
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "CreateTagged"
+      },
+      {
+        "Action": [
+          "ec2:CreateSubnet",
+          "ec2:CreateSecurityGroup",
+          "ec2:CreateRouteTable"
+        ],
+        "Condition": {
+          "StringEquals": {
+            "ec2:ResourceTag/IdlefyManaged": "true"
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "arn:aws:ec2:*:*:vpc/*",
+        "Sid": "CreateInManagedVpc"
+      },
+      {
+        "Action": "ec2:RunInstances",
+        "Condition": {
+          "StringEquals": {
+            "aws:RequestTag/IdlefyManaged": "true",
+            "aws:RequestedRegion": [
+              "eu-central-1",
+              "us-east-1"
+            ],
+            "ec2:InstanceType": [
+              "m7i.large",
+              "m7i.xlarge",
+              "g6.xlarge"
+            ]
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "arn:aws:ec2:*:*:instance/*",
+        "Sid": "RunInstancesInstance"
+      },
+      {
+        "Action": "ec2:RunInstances",
+        "Condition": {
+          "NumericLessThanEquals": {
+            "ec2:VolumeSize": 1024
+          },
+          "StringEquals": {
+            "aws:RequestTag/IdlefyManaged": "true",
+            "aws:RequestedRegion": [
+              "eu-central-1",
+              "us-east-1"
+            ]
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "arn:aws:ec2:*:*:volume/*",
+        "Sid": "RunInstancesVolume"
+      },
+      {
+        "Action": "ec2:RunInstances",
+        "Condition": {
+          "StringEquals": {
+            "ec2:ResourceTag/IdlefyManaged": "true"
+          }
+        },
+        "Effect": "Allow",
+        "Resource": [
+          "arn:aws:ec2:*:*:subnet/*",
+          "arn:aws:ec2:*:*:security-group/*",
+          "arn:aws:ec2:*:*:network-interface/*"
+        ],
+        "Sid": "RunInstancesManagedNetwork"
+      },
+      {
+        "Action": "ec2:RunInstances",
+        "Condition": {
+          "StringEquals": {
+            "ec2:Owner": [
+              "099720109477",
+              "amazon"
+            ]
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "arn:aws:ec2:*::image/*",
+        "Sid": "RunInstancesImage"
+      },
+      {
+        "Action": "ec2:RunInstances",
+        "Condition": {
+          "StringEquals": {
+            "aws:RequestedRegion": [
+              "eu-central-1",
+              "us-east-1"
+            ]
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "arn:aws:ec2:*:*:key-pair/*",
+        "Sid": "RunInstancesKeyPair"
+      },
+      {
+        "Action": "ec2:CreateTags",
+        "Condition": {
+          "StringEquals": {
+            "ec2:CreateAction": [
+              "RunInstances",
+              "CreateVpc",
+              "CreateSubnet",
+              "CreateInternetGateway",
+              "CreateRouteTable",
+              "CreateSecurityGroup",
+              "AllocateAddress",
+              "CreateVolume"
+            ]
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "CreateTagsOnCreate"
+      },
+      {
+        "Action": [
+          "ec2:TerminateInstances",
+          "ec2:StopInstances",
+          "ec2:StartInstances",
+          "ec2:RebootInstances",
+          "ec2:DeleteVpc",
+          "ec2:ModifyVpcAttribute",
+          "ec2:DeleteSubnet",
+          "ec2:ModifySubnetAttribute",
+          "ec2:DeleteInternetGateway",
+          "ec2:AttachInternetGateway",
+          "ec2:DetachInternetGateway",
+          "ec2:DeleteRouteTable",
+          "ec2:CreateRoute",
+          "ec2:DeleteRoute",
+          "ec2:AssociateRouteTable",
+          "ec2:DisassociateRouteTable",
+          "ec2:DeleteSecurityGroup",
+          "ec2:AuthorizeSecurityGroupIngress",
+          "ec2:RevokeSecurityGroupIngress",
+          "ec2:AuthorizeSecurityGroupEgress",
+          "ec2:RevokeSecurityGroupEgress",
+          "ec2:AssociateAddress",
+          "ec2:DisassociateAddress",
+          "ec2:ReleaseAddress",
+          "ec2:DeleteVolume"
+        ],
+        "Condition": {
+          "StringEquals": {
+            "ec2:ResourceTag/IdlefyManaged": "true"
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "MutateManaged"
+      },
+      {
+        "Action": "ec2-instance-connect:SendSSHPublicKey",
+        "Condition": {
+          "StringEquals": {
+            "ec2:ResourceTag/IdlefyManaged": "true"
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "arn:aws:ec2:*:*:instance/*",
+        "Sid": "InstanceConnect"
+      },
+      {
+        "Action": [
+          "iam:PassRole",
+          "ec2:AssociateIamInstanceProfile",
+          "ec2:ReplaceIamInstanceProfileAssociation",
+          "ec2:ModifyInstanceAttribute",
+          "ec2:DeleteTags",
+          "sts:*",
+          "organizations:*"
+        ],
+        "Effect": "Deny",
+        "Resource": "*",
+        "Sid": "DenyEscalation"
+      },
+      {
+        "Action": [
+          "ec2:*",
+          "ec2-instance-connect:*"
+        ],
+        "Condition": {
+          "StringNotEquals": {
+            "aws:RequestedRegion": [
+              "eu-central-1",
+              "us-east-1"
+            ]
+          }
+        },
+        "Effect": "Deny",
+        "Resource": "*",
+        "Sid": "DenyOutsideAllowedRegions"
+      }
+    ],
+    "Version": "2012-10-17"
+  },
+  "ProvisionRole.AssumeRolePolicyDocument": {
+    "Statement": [
+      {
+        "Action": "sts:AssumeRoleWithWebIdentity",
+        "Condition": {
+          "StringEquals": {
+            "app.idlefy.dev:aud": "sts.amazonaws.com",
+            "app.idlefy.dev:sub": "9b546eb4-2394-48c0-adc7-7386ccd50422:provision"
+          }
+        },
+        "Effect": "Allow",
+        "Principal": {
+          "Federated": "arn:aws:iam::123456789012:oidc-provider/app.idlefy.dev"
+        }
+      }
+    ],
+    "Version": "2012-10-17"
+  }
+}

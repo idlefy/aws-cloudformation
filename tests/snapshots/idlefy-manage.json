@@ -1,0 +1,83 @@
+{
+  "ManageRole.AssumeRolePolicyDocument": {
+    "Statement": [
+      {
+        "Action": "sts:AssumeRoleWithWebIdentity",
+        "Condition": {
+          "StringEquals": {
+            "app.idlefy.dev:aud": "sts.amazonaws.com",
+            "app.idlefy.dev:sub": "9b546eb4-2394-48c0-adc7-7386ccd50422"
+          }
+        },
+        "Effect": "Allow",
+        "Principal": {
+          "Federated": "<ref:OidcProvider>"
+        }
+      }
+    ],
+    "Version": "2012-10-17"
+  },
+  "ManageRole.Policies.IdlefyPolicy": {
+    "Statement": [
+      {
+        "Action": [
+          "ec2:DescribeInstances",
+          "ec2:DescribeTags",
+          "ec2:DescribeInstanceTypes",
+          "ec2:DescribeRegions"
+        ],
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "IdlefyCore"
+      },
+      {
+        "Action": [
+          "ec2:StartInstances",
+          "ec2:StopInstances",
+          "ec2:RebootInstances"
+        ],
+        "Condition": {
+          "StringEquals": {
+            "ec2:ResourceTag/idlefy": "enabled"
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "IdlefyVMManagementLower"
+      },
+      {
+        "Action": [
+          "ec2:StartInstances",
+          "ec2:StopInstances",
+          "ec2:RebootInstances"
+        ],
+        "Condition": {
+          "StringEquals": {
+            "ec2:ResourceTag/Idlefy": "enabled"
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "IdlefyVMManagementUpper"
+      },
+      {
+        "Action": [
+          "pricing:GetProducts"
+        ],
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "IdlefyPricing"
+      },
+      {
+        "Action": [
+          "cloudwatch:GetMetricData",
+          "cloudwatch:ListMetrics"
+        ],
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "IdlefyMetrics"
+      }
+    ],
+    "Version": "2012-10-17"
+  }
+}
