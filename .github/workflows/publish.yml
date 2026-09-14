@@ -6,25 +6,31 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 env:
   BUCKET: idlefy-cfn-templates
   ROLE_ARN: arn:aws:iam::995603458290:role/github-cfn-publish
 
 jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
   publish:
+    needs: ci
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: requirements-dev.txt
       - run: pip install -r requirements-dev.txt
-      - run: cfn-lint templates/*.yaml
-      - run: pytest -q
 
       - name: Stamp the version into the templates
         run: |
@@ -34,7 +40,7 @@ jobs:
           done
           cfn-lint dist/*.yaml
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
         with:
           role-to-assume: ${{ env.ROLE_ARN }}
           aws-region: us-east-1
