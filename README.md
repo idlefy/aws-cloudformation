@@ -27,7 +27,8 @@ The provision role can only act on resources that carry the tag **`IdlefyManaged
 - Stopping, starting, terminating, deleting, associating or modifying is allowed only on
   resources that already carry the tag (`ec2:ResourceTag`).
 - Instances may only launch into a subnet and security group that carry the tag, from an
-  image owned by Canonical or Amazon.
+  image owned by Canonical or Amazon; the network interface created with the instance must
+  be tagged at launch like the instance and its volume.
 - `ec2:CreateTags` works only as part of a create call; the role can never add or remove
   tags afterwards, so it cannot widen its own reach.
 - Explicit `Deny` on `iam:PassRole`, instance-profile association, `ModifyInstanceAttribute`

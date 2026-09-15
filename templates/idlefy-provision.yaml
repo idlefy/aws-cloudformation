@@ -137,10 +137,20 @@ Resources:
             Resource:
               - arn:aws:ec2:*:*:subnet/*
               - arn:aws:ec2:*:*:security-group/*
-              - arn:aws:ec2:*:*:network-interface/*
             Condition:
               StringEquals:
                 ec2:ResourceTag/IdlefyManaged: "true"
+
+          # The primary network interface is CREATED by RunInstances, so it has no
+          # resource tag to match yet: fence it like the instance and the volume.
+          - Sid: RunInstancesNetworkInterface
+            Effect: Allow
+            Action: ec2:RunInstances
+            Resource: arn:aws:ec2:*:*:network-interface/*
+            Condition:
+              StringEquals:
+                aws:RequestTag/IdlefyManaged: "true"
+                aws:RequestedRegion: !Ref AllowedRegions
 
           - Sid: RunInstancesImage
             Effect: Allow

@@ -102,9 +102,22 @@ def test_run_instances_volume_size_is_capped(statements):
 def test_run_instances_network_refs_require_managed_tag(statements):
     stmt = next(s for s in statements if s["Sid"] == "RunInstancesManagedNetwork")
     assert RESOURCE_TAG in _cond_keys(stmt)
-    assert set(stmt["Resource"]) == {
-        "arn:aws:ec2:*:*:subnet/*", "arn:aws:ec2:*:*:security-group/*", "arn:aws:ec2:*:*:network-interface/*",
-    }
+    assert set(stmt["Resource"]) == {"arn:aws:ec2:*:*:subnet/*", "arn:aws:ec2:*:*:security-group/*"}
+
+
+def test_run_instances_new_network_interface_requires_request_tag(statements):
+    # The ENI is created by the call, so ec2:ResourceTag never matches it (v1.0.0 bug:
+    # every launch was denied on network-interface/*).
+    stmt = next(s for s in statements if s["Sid"] == "RunInstancesNetworkInterface")
+    assert stmt["Resource"] == "arn:aws:ec2:*:*:network-interface/*"
+    assert {REQUEST_TAG, "aws:RequestedRegion"} <= _cond_keys(stmt)
+    assert RESOURCE_TAG not in _cond_keys(stmt)
+    eni_allows = [
+        s for s in statements
+        if s["Effect"] == "Allow" and "ec2:RunInstances" in _actions(s)
+        and any("network-interface/" in r for r in ([s["Resource"]] if isinstance(s["Resource"], str) else s["Resource"]))
+    ]
+    assert eni_allows == [stmt]
 
 
 def test_images_limited_to_canonical_and_amazon(statements):

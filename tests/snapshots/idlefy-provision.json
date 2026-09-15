@@ -123,10 +123,24 @@
         "Effect": "Allow",
         "Resource": [
           "arn:aws:ec2:*:*:subnet/*",
-          "arn:aws:ec2:*:*:security-group/*",
-          "arn:aws:ec2:*:*:network-interface/*"
+          "arn:aws:ec2:*:*:security-group/*"
         ],
         "Sid": "RunInstancesManagedNetwork"
+      },
+      {
+        "Action": "ec2:RunInstances",
+        "Condition": {
+          "StringEquals": {
+            "aws:RequestTag/IdlefyManaged": "true",
+            "aws:RequestedRegion": [
+              "eu-central-1",
+              "us-east-1"
+            ]
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "arn:aws:ec2:*:*:network-interface/*",
+        "Sid": "RunInstancesNetworkInterface"
       },
       {
         "Action": "ec2:RunInstances",
