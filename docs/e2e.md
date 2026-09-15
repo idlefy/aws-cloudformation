@@ -9,25 +9,49 @@ Prerequisites: core-api on dev with `CFN_TEMPLATE_BASE_URL` and `CFN_TEMPLATE_VE
 to a published version; you are OWNER of the second org; AWS console access to
 `995603458290` as `aleksei` (MFA).
 
+Calls are `https://app.idlefy.dev/api/v1/...` with the OWNER's bearer token. Cloudflare
+rejects some default client user agents with `403 error code: 1010`; send a curl-like
+`User-Agent`. Dev registration is closed, so the second org and its OWNER are created in a
+core-api pod (`create_organization_with_owner`, `User.invited_name` must be set).
+
 1. `POST /aws/cfn-setup` with `organization_id=<second org>`, `account_id=995603458290`,
    `region=us-east-1`, `oidc_provider_exists=true` (the provider already exists in this
    account). Open the returned `url`, tick the `CAPABILITY_NAMED_IAM` box, create the stack
    `Idlefy-Manage`. Expect CREATE_COMPLETE with only the role.
-2. `POST /auth/organization/cloud-providers` with the returned `credential_config`, then
-   `POST /auth/cloud-providers/{id}/credentials/verify`. Expect `valid: true`.
-3. `POST /auth/cloud-providers/{id}/provisioning/cfn-url` with
-   `allowed_regions=["us-east-1"]`, `allowed_instance_types=["t3.micro"]`. Open the URL,
+2. `POST /auth/organization/cloud-providers` with `provider_type: "AWS"` (upper case),
+   a `provider_name` and `credentials` = the returned `credential_config`, then
+   `POST /auth/cloud-providers/{id}/credentials/verify` with body `{}` (the body is
+   required). Expect `valid: true`, `extra_permissions_suspected: false`.
+3. `POST /auth/cloud-providers/{id}/provisioning/cfn-url` with `region=us-east-1` (console
+   region, required), `allowed_regions=["us-east-1"]`, `allowed_instance_types=["t3.micro"]`. Open the URL,
    create `Idlefy-Provision`. Expect CREATE_COMPLETE with the policy and the role.
-4. `POST /auth/cloud-providers/{id}/provisioning/verify`. Expect `enabled: true`, no
-   warnings (the account has a default VPC, so the RunInstances probe passes too).
-5. Negative: edit the provision role's trust policy `sub` in the console, run verify again.
-   Expect 404 `provisioning_role_not_found`. Restore it (or delete/recreate the stack).
+4. `POST /auth/cloud-providers/{id}/provisioning/verify`. Expect `enabled: true`,
+   `warnings: []`. (Verify only dry-runs a tagged `CreateVpc`; a dry-run launch needs a
+   subnet and security group tagged `IdlefyManaged=true`, see the v1.0.1 changelog.)
+5. Negative: save the provision role's trust policy (`aws iam get-role`), replace its `sub`
+   with another value (`aws iam update-assume-role-policy`), run verify again. Expect 404
+   `provisioning_role_not_found` and the stored block `enabled: false`,
+   `last_error: provisioning_role_not_found`. Restore the saved document; verify is 200 again.
+   After a template upgrade, re-run `cfn-url` first: the fence carries `template_version`, so
+   the block resets to `enabled: false` until verify. Re-running it with an unchanged fence
+   keeps `enabled: true`.
 6. Delete the `Idlefy-Provision` stack. `provisioning/verify` → 404
    `provisioning_role_not_found`; `GET .../provisioning` still shows the stored block until
    `DELETE .../provisioning` clears it. Manage `credentials/verify` still `valid: true`.
-7. Delete the `Idlefy-Manage` stack (it created no provider, so the primary dev org is
-   unaffected). Remove the cloud provider from the second org.
+7. Remove the cloud provider from the second org (`DELETE /auth/cloud-providers/{id}`)
+   first, so no background job assumes a role that is about to disappear, then delete the
+   `Idlefy-Manage` stack (it created no OIDC provider, so the primary dev org is unaffected:
+   check `app.idlefy.dev` and `IdlefyRole-a50adeec1a45` still exist).
 8. Clean-up of the legacy test instances `idlefy-test` and `idlefy-test-broken`
    (us-east-1, t3.micro) once the run is green — owner decision D12.
 
-Record the run (date, template version, core-api version, outcome) in the Jira story.
+Record the run (date, template version, core-api version, outcome) in the Jira story. Expect
+one Sentry event per AssumeRole denial in steps 5-6 (`Failed to assume role with web
+identity`): known noise, not a failure.
+
+## Runs
+
+| Date | Templates | core-api | Outcome |
+|---|---|---|---|
+| 2026-09-15 | v1.0.0 | 2414a04f9 | Steps 1-4 green except a verify warning `run_instances: UnauthorizedOperation`: the created network interface was fenced with `ec2:ResourceTag` (fixed in v1.0.1). |
+| 2026-09-15 | v1.0.1 (stack updated in place) | fbc3ca462 | All steps green; verify `warnings: []`; legacy t3.micros terminated. |
