@@ -18,13 +18,15 @@
   pair. Actions kept for later stories (`CreateVolume`, `DeleteVolume`, `RebootInstances`,
   egress rules, `DeleteRoute`, `GetConsoleOutput`, EC2 Instance Connect, `pricing:GetProducts`,
   `ssm:GetParameters`) now carry a "reserved for S3/S4" comment saying why they are there.
-- `idlefy-provision.yaml`: `CreateSubnet`, `CreateSecurityGroup` and `CreateRouteTable` moved from
-  `CreateTagged` to `CreateTaggedInVpc`, scoped to their own resource ARNs. With `Resource "*"` the
-  request tag also authorized the parent VPC, so the role could create them in any VPC; the VPC side
-  now always needs `IdlefyManaged=true` on the VPC (`CreateInManagedVpc`).
-- Launching into a VPC you tagged yourself (bring your own network) needs one more statement
-  after this narrowing — a separate consent tag — and is planned for v1.2.0 (Idlefy ID-541).
-  Until then Idlefy only uses networks it created.
+- No change to which VPC the role may build in. A narrowing was drafted for this release on the
+  assumption that `Resource "*"` on `CreateTagged` let the request tag authorize the parent VPC
+  as well; a DryRun against the deployed v1.0.1 role disproved it. `aws:RequestTag` is in the
+  request context only for the resource being tagged, so `CreateSubnet` into an untagged VPC is
+  already denied on the `vpc/*` resource, with no statement matching it. `CreateInManagedVpc` is
+  and was the only authority for the VPC side. An invariant test now pins that property.
+- Launching into a VPC you tagged yourself (bring your own network) needs one more statement —
+  a separate consent tag — and is planned for v1.2.0 (Idlefy ID-541). Until then Idlefy only
+  uses networks it created. This is unchanged by v1.1.0.
 - Update the `Idlefy-Provision` stack in place; parameters and role names are unchanged.
 
 ## v1.0.1

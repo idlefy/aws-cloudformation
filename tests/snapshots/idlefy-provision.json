@@ -58,7 +58,10 @@
       {
         "Action": [
           "ec2:CreateVpc",
+          "ec2:CreateSubnet",
           "ec2:CreateInternetGateway",
+          "ec2:CreateRouteTable",
+          "ec2:CreateSecurityGroup",
           "ec2:AllocateAddress",
           "ec2:CreateVolume"
         ],
@@ -74,29 +77,6 @@
         "Effect": "Allow",
         "Resource": "*",
         "Sid": "CreateTagged"
-      },
-      {
-        "Action": [
-          "ec2:CreateSubnet",
-          "ec2:CreateSecurityGroup",
-          "ec2:CreateRouteTable"
-        ],
-        "Condition": {
-          "StringEquals": {
-            "aws:RequestTag/IdlefyManaged": "true",
-            "aws:RequestedRegion": [
-              "eu-central-1",
-              "us-east-1"
-            ]
-          }
-        },
-        "Effect": "Allow",
-        "Resource": [
-          "arn:aws:ec2:*:*:subnet/*",
-          "arn:aws:ec2:*:*:security-group/*",
-          "arn:aws:ec2:*:*:route-table/*"
-        ],
-        "Sid": "CreateTaggedInVpc"
       },
       {
         "Action": [

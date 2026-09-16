@@ -98,33 +98,23 @@ Resources:
               - ssm:GetParameters   # reserved for S3/S4: resolving several AMIs in one call
             Resource: arn:aws:ssm:*::parameter/aws/service/canonical/ubuntu/*
 
+          # Resource "*" does NOT let the request tag authorize the parent VPC of a
+          # CreateSubnet / CreateSecurityGroup / CreateRouteTable call: aws:RequestTag is in the
+          # request context only for the resource being tagged, so this statement never matches
+          # the vpc/* side and CreateInManagedVpc below is what authorizes it, on the VPC's own
+          # tag. Verified by DryRun against the v1.0.1 role on 2026-09-16: CreateSubnet into the
+          # account's default VPC is denied on the vpc/* resource with no matched statement.
           - Sid: CreateTagged
             Effect: Allow
             Action:
               - ec2:CreateVpc
+              - ec2:CreateSubnet
               - ec2:CreateInternetGateway
+              - ec2:CreateRouteTable
+              - ec2:CreateSecurityGroup
               - ec2:AllocateAddress
               - ec2:CreateVolume   # reserved for S3/S4: extra data volumes
             Resource: "*"
-            Condition:
-              StringEquals:
-                aws:RequestTag/IdlefyManaged: "true"
-                aws:RequestedRegion: !Ref AllowedRegions
-
-          # Resources created inside a VPC. The request tag authorizes only the new
-          # subnet / security group / route table; the VPC side of the same call is
-          # authorized only by CreateInManagedVpc. With Resource "*" the request tag
-          # also matched the parent VPC, so any VPC in the account was usable.
-          - Sid: CreateTaggedInVpc
-            Effect: Allow
-            Action:
-              - ec2:CreateSubnet
-              - ec2:CreateSecurityGroup
-              - ec2:CreateRouteTable
-            Resource:
-              - arn:aws:ec2:*:*:subnet/*
-              - arn:aws:ec2:*:*:security-group/*
-              - arn:aws:ec2:*:*:route-table/*
             Condition:
               StringEquals:
                 aws:RequestTag/IdlefyManaged: "true"

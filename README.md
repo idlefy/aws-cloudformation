@@ -53,10 +53,11 @@ rate limits and by your EC2 service quotas.
 
 Tagging one of your existing subnets and a security group with `IdlefyManaged=true` is
 consent for Idlefy to launch dev boxes there. Idlefy never deletes or modifies a network it
-did not create, tag or no tag. (Feature planned.) From v1.1.0 a subnet, security group or
-route table can only be created inside a VPC that carries the tag, so launching into your own
-VPC will need one more statement — a separate consent tag, shipping in v1.2.0 — before Idlefy
-can create its per-box security group there.
+did not create, tag or no tag. (Feature planned.) Note that a subnet, security group or route
+table can only be created inside a VPC that itself carries the tag — this has been true since
+v1.0.0 and is not new in v1.1.0 — so launching into your own VPC will need one more statement,
+a separate consent tag, shipping in v1.2.0, before Idlefy can create its per-box security
+group there.
 
 ## Compatibility contract with the Idlefy app
 
