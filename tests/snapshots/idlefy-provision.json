@@ -3,8 +3,7 @@
     "Statement": [
       {
         "Action": [
-          "ec2:Describe*",
-          "ec2:GetConsoleOutput"
+          "ec2:Describe*"
         ],
         "Condition": {
           "StringEquals": {
@@ -21,12 +20,30 @@
       {
         "Action": [
           "servicequotas:GetServiceQuota",
+          "servicequotas:GetAWSDefaultServiceQuota",
           "servicequotas:ListServiceQuotas",
           "pricing:GetProducts"
         ],
         "Effect": "Allow",
         "Resource": "*",
         "Sid": "DescribeGlobal"
+      },
+      {
+        "Action": [
+          "ec2:GetEbsEncryptionByDefault",
+          "ec2:GetEbsDefaultKmsKeyId"
+        ],
+        "Condition": {
+          "StringEquals": {
+            "aws:RequestedRegion": [
+              "eu-central-1",
+              "us-east-1"
+            ]
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "EbsEncryptionDefaults"
       },
       {
         "Action": [
@@ -157,18 +174,40 @@
         "Sid": "RunInstancesImage"
       },
       {
-        "Action": "ec2:RunInstances",
+        "Action": [
+          "kms:Decrypt",
+          "kms:DescribeKey",
+          "kms:GenerateDataKeyWithoutPlaintext",
+          "kms:ReEncrypt*"
+        ],
         "Condition": {
           "StringEquals": {
-            "aws:RequestedRegion": [
-              "eu-central-1",
-              "us-east-1"
-            ]
+            "kms:CallerAccount": "123456789012"
+          },
+          "StringLike": {
+            "kms:ViaService": "ec2.*.amazonaws.com"
           }
         },
         "Effect": "Allow",
-        "Resource": "arn:aws:ec2:*:*:key-pair/*",
-        "Sid": "RunInstancesKeyPair"
+        "Resource": "arn:aws:kms:*:123456789012:key/*",
+        "Sid": "EbsEncryptionKms"
+      },
+      {
+        "Action": "kms:CreateGrant",
+        "Condition": {
+          "Bool": {
+            "kms:GrantIsForAWSResource": "true"
+          },
+          "StringEquals": {
+            "kms:CallerAccount": "123456789012"
+          },
+          "StringLike": {
+            "kms:ViaService": "ec2.*.amazonaws.com"
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "arn:aws:kms:*:123456789012:key/*",
+        "Sid": "EbsEncryptionKmsGrant"
       },
       {
         "Action": "ec2:CreateTags",
@@ -228,18 +267,9 @@
         "Sid": "MutateManaged"
       },
       {
-        "Action": "ec2-instance-connect:SendSSHPublicKey",
-        "Condition": {
-          "StringEquals": {
-            "ec2:ResourceTag/IdlefyManaged": "true"
-          }
-        },
-        "Effect": "Allow",
-        "Resource": "arn:aws:ec2:*:*:instance/*",
-        "Sid": "InstanceConnect"
-      },
-      {
         "Action": [
+          "ec2-instance-connect:*",
+          "ec2:GetConsole*",
           "iam:PassRole",
           "ec2:AssociateIamInstanceProfile",
           "ec2:ReplaceIamInstanceProfileAssociation",

@@ -24,11 +24,29 @@ The provision role can only act on resources that carry the tag **`IdlefyManaged
   or instance is allowed only when the request tags it `IdlefyManaged=true`
   (`aws:RequestTag`), inside the regions you list (`AllowedRegions`), with an instance type
   from your list (`AllowedInstanceTypes`) and a volume no larger than `MaxVolumeGiB`.
+- A subnet, security group or route table can only be created inside a VPC that already
+  carries the tag; tagging the new resource alone is not enough.
 - Stopping, starting, terminating, deleting, associating or modifying is allowed only on
   resources that already carry the tag (`ec2:ResourceTag`).
 - Instances may only launch into a subnet and security group that carry the tag, from an
   image owned by Canonical or Amazon; the network interface created with the instance must
   be tagged at launch like the instance and its volume.
+- KMS is usable only through EC2 (`kms:ViaService = ec2.*.amazonaws.com`; grants only for AWS
+  resources) and only on keys in your own account (the statements are scoped to
+  `arn:aws:kms:*:<your-account>:key/*`), which encrypted root volumes need. A key shared into
+  your account from somewhere else is out of reach even if its key policy would allow it.
+  If your account's default EBS key is a customer-managed key, its key policy must allow the
+  account (the default key policy does).
+  The role can also read the account's EBS encryption defaults and the AWS default value of an
+  EC2 quota your account has never changed.
+- The role can never name an EC2 key pair: Idlefy installs your SSH keys through cloud-init, so
+  no key pair is ever attached to a box.
+- **Idlefy can never get inside a box, or read what is inside it.** It starts, stops,
+  terminates and networks your boxes from the outside; it has no way to open a shell, run a
+  command, push an SSH key onto a running instance, or read the guest's own console output or
+  screen. `ec2-instance-connect:*` and `ec2:GetConsole*` are explicitly denied, so no later
+  policy change can grant them either. (v1.0.0 and v1.0.1 allowed `SendSSHPublicKey` and
+  `GetConsoleOutput`; v1.1.0 removes and then denies both.)
 - `ec2:CreateTags` works only as part of a create call; the role can never add or remove
   tags afterwards, so it cannot widen its own reach.
 - Explicit `Deny` on `iam:PassRole`, instance-profile association, `ModifyInstanceAttribute`
@@ -43,8 +61,15 @@ rate limits and by your EC2 service quotas.
 ### Bring your own network
 
 Tagging one of your existing subnets and a security group with `IdlefyManaged=true` is
-consent for Idlefy to launch dev boxes there. Idlefy never deletes or modifies a network it
-did not create, tag or no tag. (Feature planned; the permission model already supports it.)
+consent for Idlefy to launch dev boxes there: the launch statements accept any subnet and
+security group carrying the tag, whoever created them. Untagged resources are untouchable,
+and the Idlefy app will not delete or modify a network it did not create even once you tag
+it. (Feature planned.)
+
+What is still missing for your own VPC is the per-box security group Idlefy creates for each
+box: a security group, subnet or route table can only be created inside a VPC that itself
+carries the tag — true since v1.0.0, unchanged here — so building in your VPC needs one more
+statement, a separate consent tag, planned for v1.2.0.
 
 ## Compatibility contract with the Idlefy app
 

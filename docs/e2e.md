@@ -19,9 +19,14 @@ core-api pod (`create_organization_with_owner`, `User.invited_name` must be set)
    account). Open the returned `url`, tick the `CAPABILITY_NAMED_IAM` box, create the stack
    `Idlefy-Manage`. Expect CREATE_COMPLETE with only the role.
 2. `POST /auth/organization/cloud-providers` with `provider_type: "AWS"` (upper case),
-   a `provider_name` and `credentials` = the returned `credential_config`, then
-   `POST /auth/cloud-providers/{id}/credentials/verify` with body `{}` (the body is
-   required). Expect `valid: true`, `extra_permissions_suspected: false`.
+   a `provider_name` and `credentials` = the returned `credential_config` **plus
+   `"regions": ["us-east-1"]`**, then `POST /auth/cloud-providers/{id}/credentials/verify`
+   with body `{}` (the body is required). Expect `valid: true`,
+   `extra_permissions_suspected: false`.
+   `cfn-setup` does not return `regions` — the app collects them in the connect form — and
+   verify refuses without them: `valid: false`, `AWS credentials must include non-empty
+   'regions'`, every check unrun. If that happens, `PATCH /auth/cloud-providers/{id}` with
+   `{"regions": ["us-east-1"]}` and verify again.
 3. `POST /auth/cloud-providers/{id}/provisioning/cfn-url` with `region=us-east-1` (console
    region, required), `allowed_regions=["us-east-1"]`, `allowed_instance_types=["t3.micro"]`. Open the URL,
    create `Idlefy-Provision`. Expect CREATE_COMPLETE with the policy and the role.

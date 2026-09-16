@@ -62,7 +62,6 @@ Resources:
             Effect: Allow
             Action:
               - ec2:Describe*
-              - ec2:GetConsoleOutput
             Resource: "*"
             Condition:
               StringEquals:
@@ -72,17 +71,38 @@ Resources:
             Effect: Allow
             Action:
               - servicequotas:GetServiceQuota
+              # GetServiceQuota returns only quotas the account has already changed; for an
+              # untouched quota the documented fallback is the AWS default value. Without this
+              # every limit preflight reports would be unknown on a fresh account.
+              - servicequotas:GetAWSDefaultServiceQuota
               - servicequotas:ListServiceQuotas
-              - pricing:GetProducts
+              - pricing:GetProducts   # reserved for S3/S4: instance price lookups
             Resource: "*"
+
+          # EBS encryption defaults are not covered by ec2:Describe*.
+          - Sid: EbsEncryptionDefaults
+            Effect: Allow
+            Action:
+              - ec2:GetEbsEncryptionByDefault
+              - ec2:GetEbsDefaultKmsKeyId
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref AllowedRegions
 
           - Sid: UbuntuAmiLookup
             Effect: Allow
             Action:
               - ssm:GetParameter
-              - ssm:GetParameters
+              - ssm:GetParameters   # reserved for S3/S4: resolving several AMIs in one call
             Resource: arn:aws:ssm:*::parameter/aws/service/canonical/ubuntu/*
 
+          # Resource "*" does NOT let the request tag authorize the parent VPC of a
+          # CreateSubnet / CreateSecurityGroup / CreateRouteTable call: aws:RequestTag is in the
+          # request context only for the resource being tagged, so this statement never matches
+          # the vpc/* side and CreateInManagedVpc below is what authorizes it, on the VPC's own
+          # tag. Verified by DryRun against the v1.0.1 role on 2026-09-16: CreateSubnet into the
+          # account's default VPC is denied on the vpc/* resource with no matched statement.
           - Sid: CreateTagged
             Effect: Allow
             Action:
@@ -92,7 +112,7 @@ Resources:
               - ec2:CreateRouteTable
               - ec2:CreateSecurityGroup
               - ec2:AllocateAddress
-              - ec2:CreateVolume
+              - ec2:CreateVolume   # reserved for S3/S4: extra data volumes
             Resource: "*"
             Condition:
               StringEquals:
@@ -162,13 +182,41 @@ Resources:
                   - "099720109477"
                   - amazon
 
-          - Sid: RunInstancesKeyPair
+          # Encrypted root volumes: EC2 calls KMS on the caller's behalf with the account's
+          # EBS key. Without these a launch or start succeeds and the instance then stops or
+          # terminates with Client.InvalidKMSKey.* (the permissions boundary equals this
+          # policy). A customer-managed key must also allow the account in its key policy.
+          # What limits these to YOUR OWN keys is the Resource ARN, not a condition:
+          # kms:CallerAccount matches the account of the CALLER, which in a role policy is
+          # always this account, so it can never exclude a key owned elsewhere. It is kept
+          # because it is the documented pairing for ViaService, but the account-scoped ARN
+          # is the control: without it, a key shared into this account from another account
+          # could be used through EC2.
+          - Sid: EbsEncryptionKms
             Effect: Allow
-            Action: ec2:RunInstances
-            Resource: arn:aws:ec2:*:*:key-pair/*
+            Action:
+              - kms:Decrypt
+              - kms:DescribeKey
+              - kms:GenerateDataKeyWithoutPlaintext
+              - kms:ReEncrypt*
+            Resource: !Sub arn:aws:kms:*:${AWS::AccountId}:key/*
             Condition:
+              StringLike:
+                kms:ViaService: ec2.*.amazonaws.com
               StringEquals:
-                aws:RequestedRegion: !Ref AllowedRegions
+                kms:CallerAccount: !Ref "AWS::AccountId"
+
+          - Sid: EbsEncryptionKmsGrant
+            Effect: Allow
+            Action: kms:CreateGrant
+            Resource: !Sub arn:aws:kms:*:${AWS::AccountId}:key/*
+            Condition:
+              StringLike:
+                kms:ViaService: ec2.*.amazonaws.com
+              StringEquals:
+                kms:CallerAccount: !Ref "AWS::AccountId"
+              Bool:
+                kms:GrantIsForAWSResource: "true"
 
           - Sid: CreateTagsOnCreate
             Effect: Allow
@@ -192,7 +240,7 @@ Resources:
               - ec2:TerminateInstances
               - ec2:StopInstances
               - ec2:StartInstances
-              - ec2:RebootInstances
+              - ec2:RebootInstances   # reserved for S3/S4: "restart my box"
               - ec2:DeleteVpc
               - ec2:ModifyVpcAttribute
               - ec2:DeleteSubnet
@@ -202,27 +250,20 @@ Resources:
               - ec2:DetachInternetGateway
               - ec2:DeleteRouteTable
               - ec2:CreateRoute
-              - ec2:DeleteRoute
+              - ec2:DeleteRoute   # reserved for S3/S4: repairing a hand-edited route table
               - ec2:AssociateRouteTable
               - ec2:DisassociateRouteTable
               - ec2:DeleteSecurityGroup
               - ec2:AuthorizeSecurityGroupIngress
               - ec2:RevokeSecurityGroupIngress
+              # reserved for S3/S4: egress policies per box (today the default allow-all stands)
               - ec2:AuthorizeSecurityGroupEgress
               - ec2:RevokeSecurityGroupEgress
               - ec2:AssociateAddress
               - ec2:DisassociateAddress
               - ec2:ReleaseAddress
-              - ec2:DeleteVolume
+              - ec2:DeleteVolume   # reserved for S3/S4: detached data volumes
             Resource: "*"
-            Condition:
-              StringEquals:
-                ec2:ResourceTag/IdlefyManaged: "true"
-
-          - Sid: InstanceConnect
-            Effect: Allow
-            Action: ec2-instance-connect:SendSSHPublicKey
-            Resource: arn:aws:ec2:*:*:instance/*
             Condition:
               StringEquals:
                 ec2:ResourceTag/IdlefyManaged: "true"
@@ -230,6 +271,15 @@ Resources:
           - Sid: DenyEscalation
             Effect: Deny
             Action:
+              # Idlefy must never be able to get inside a box it manages, or to read what is
+              # inside it. SendSSHPublicKey pushes a caller-chosen SSH key onto a running
+              # instance; GetConsoleOutput and GetConsoleScreenshot return the guest's own
+              # output — the boot log, kernel messages, whatever cloud-init printed, the
+              # screen. All are denied outright rather than merely left ungranted: a Deny
+              # cannot be undone by a later Allow, here or in any policy attached to this
+              # role. v1.0.0 and v1.0.1 granted the first two; nothing ever used them.
+              - ec2-instance-connect:*
+              - ec2:GetConsole*
               - iam:PassRole
               - ec2:AssociateIamInstanceProfile
               - ec2:ReplaceIamInstanceProfileAssociation

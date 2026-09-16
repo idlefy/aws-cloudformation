@@ -6,6 +6,7 @@ These fail CI when someone "just adds an action" without the tag/region fence.
 import fnmatch
 
 import pytest
+from render import ACCOUNT_ID  # tests/ is on sys.path (conftest already imports from render)
 
 FENCE_TAG = "IdlefyManaged"
 REQUEST_TAG = f"aws:RequestTag/{FENCE_TAG}"
@@ -23,13 +24,26 @@ FORBIDDEN_ALLOWS = {
     "ec2:ModifyInstanceAttribute", "ec2:DeleteTags",
     "ec2:AssociateIamInstanceProfile", "ec2:ReplaceIamInstanceProfileAssociation",
     "ec2:ModifyLaunchTemplate", "ec2:CreateLaunchTemplate",
+    # Idlefy manages boxes from the outside and never gets inside one. Matched with fnmatch,
+    # so this also forbids allowing SendSSHPublicKey by name.
+    "ec2-instance-connect:*",
+    # Same rule, read side: the console output and screenshot are the guest's own output.
+    "ec2:GetConsole*",
 }
 REQUIRED_DENIES = {
     "iam:PassRole", "ec2:AssociateIamInstanceProfile", "ec2:ReplaceIamInstanceProfileAssociation",
     "ec2:ModifyInstanceAttribute", "ec2:DeleteTags", "sts:*", "organizations:*",
+    "ec2-instance-connect:*", "ec2:GetConsole*",
 }
 # Read-only prefixes that legitimately have no tag condition.
-READ_ONLY = ("ec2:Describe", "ec2:GetConsoleOutput", "servicequotas:", "pricing:", "ssm:Get")
+READ_ONLY = (
+    "ec2:Describe", "ec2:GetEbsEncryptionByDefault", "ec2:GetEbsDefaultKmsKeyId",
+    "servicequotas:", "pricing:", "ssm:Get",
+)
+# Creates whose call also names the parent VPC: the request tag may authorize only the
+# new resource ARN, the VPC side must carry the fence tag (v1.1.0).
+IN_VPC_CREATES = {"ec2:CreateSubnet", "ec2:CreateSecurityGroup", "ec2:CreateRouteTable"}
+KMS_VIA_EC2 = "ec2.*.amazonaws.com"
 
 
 @pytest.fixture(scope="session")
@@ -40,6 +54,11 @@ def statements(provision):
 def _actions(stmt):
     a = stmt["Action"]
     return [a] if isinstance(a, str) else list(a)
+
+
+def _resources(stmt):
+    r = stmt["Resource"]
+    return [r] if isinstance(r, str) else list(r)
 
 
 def _cond_keys(stmt):
@@ -60,6 +79,9 @@ def test_mutating_actions_require_the_resource_tag(statements):
             continue
         for action in _actions(s):
             if action.startswith(READ_ONLY) or action in CREATE_ACTIONS or action == "ec2:CreateTags":
+                continue
+            if action.startswith("kms:"):
+                assert "kms:ViaService" in _cond_keys(s), f"{s['Sid']}: {action} lacks kms:ViaService"
                 continue
             assert RESOURCE_TAG in _cond_keys(s), f"{s['Sid']}: {action} lacks {RESOURCE_TAG}"
 
@@ -172,3 +194,78 @@ def test_fence_tag_key_is_distinct_from_manage_tag(statements, manage):
     }
     assert manage_keys == {"ec2:ResourceTag/idlefy", "ec2:ResourceTag/Idlefy"}
     assert RESOURCE_TAG not in manage_keys
+
+
+def test_the_role_can_never_get_inside_a_box(statements):
+    # Product rule, not a preference: Idlefy operates boxes from the outside — start, stop,
+    # terminate, network — and never has access inside the guest. EC2 Instance Connect pushes a
+    # caller-chosen SSH key onto a running instance, so it is denied unconditionally rather than
+    # simply left out: an Allow added later, here or in another policy on this role, cannot
+    # override a Deny. v1.0.0 and v1.0.1 granted SendSSHPublicKey; nothing ever used it.
+    inside = ("ec2-instance-connect:", "ec2:GetConsole")
+    assert not [
+        s for s in statements
+        if s["Effect"] == "Allow" and any(a.startswith(inside) for a in _actions(s))
+    ]
+    unconditional = {
+        a for s in statements if s["Effect"] == "Deny" and "Condition" not in s for a in _actions(s)
+    }
+    assert {"ec2-instance-connect:*", "ec2:GetConsole*"} <= unconditional
+
+
+def test_vpc_side_of_in_vpc_creates_requires_the_managed_tag(statements):
+    # This is the whole fence for "which VPC may Idlefy build in", and it does not depend on
+    # the Resource ARN of the create statement: aws:RequestTag is in context only for the
+    # resource being tagged, so a `Resource "*"` create statement never matches the vpc/* side.
+    # Confirmed by DryRun against the deployed v1.0.1 role on 2026-09-16 — CreateSubnet into the
+    # account's default VPC is denied on `.../vpc/<id>` with matchedStatements null. The test
+    # therefore asserts the property that matters (exactly one statement authorizes the VPC side,
+    # and it keys on the VPC's own tag) rather than the shape of the create statement.
+    vpc_allows = [
+        s for s in statements
+        if s["Effect"] == "Allow" and IN_VPC_CREATES & set(_actions(s)) and any(r.endswith(":vpc/*") for r in _resources(s))
+    ]
+    assert [s["Sid"] for s in vpc_allows] == ["CreateInManagedVpc"]
+    assert RESOURCE_TAG in _cond_keys(vpc_allows[0])
+    assert REQUEST_TAG not in _cond_keys(vpc_allows[0])
+
+
+def test_ebs_encryption_defaults_are_readable_in_allowed_regions(statements):
+    stmt = next(s for s in statements if s["Sid"] == "EbsEncryptionDefaults")
+    assert set(_actions(stmt)) == {"ec2:GetEbsEncryptionByDefault", "ec2:GetEbsDefaultKmsKeyId"}
+    # The rendered region list is whatever AllowedRegions the harness passed, so derive it from
+    # a statement built from the same parameters instead of hard-coding the harness's value.
+    describe = next(s for s in statements if s["Sid"] == "Describe")
+    assert (
+        stmt["Condition"]["StringEquals"]["aws:RequestedRegion"]
+        == describe["Condition"]["StringEquals"]["aws:RequestedRegion"]
+    )
+
+
+def test_no_statement_allows_run_instances_on_a_key_pair(statements):
+    # The provider never sends KeyName (cloud-init installs the keys), so the role has no
+    # business naming a key pair at all. v1.0.0/v1.0.1 carried a RunInstancesKeyPair statement.
+    assert not [s for s in statements if any("key-pair/" in r for r in _resources(s))]
+
+
+def test_kms_is_usable_only_through_ec2(statements):
+    # core-api refuses to launch below template v1.1.0 precisely because these two Sids are what
+    # v1.1.0 adds (ProvisioningFenceError("template_version")); their existence is the contract.
+    kms = [s for s in statements if s["Effect"] == "Allow" and any(a.startswith("kms:") for a in _actions(s))]
+    assert {s["Sid"] for s in kms} == {"EbsEncryptionKms", "EbsEncryptionKmsGrant"}
+    for s in kms:
+        assert s["Condition"]["StringLike"]["kms:ViaService"] == KMS_VIA_EC2, s["Sid"]
+        # The account-scoped Resource is what keeps this to the account's OWN keys. A
+        # condition cannot do it: kms:CallerAccount matches the account of the caller, which
+        # in a role policy is always this account, so it never excludes a key owned elsewhere
+        # (AWS uses it in KEY policies, where the caller is the unknown). Without the ARN a
+        # key shared into this account from another account would be usable through EC2.
+        assert _resources(s) == [f"arn:aws:kms:*:{ACCOUNT_ID}:key/*"], s["Sid"]
+        assert s["Condition"]["StringEquals"]["kms:CallerAccount"] == ACCOUNT_ID, s["Sid"]
+    use = next(s for s in kms if s["Sid"] == "EbsEncryptionKms")
+    assert set(_actions(use)) == {
+        "kms:Decrypt", "kms:DescribeKey", "kms:GenerateDataKeyWithoutPlaintext", "kms:ReEncrypt*",
+    }
+    grant = next(s for s in kms if s["Sid"] == "EbsEncryptionKmsGrant")
+    assert _actions(grant) == ["kms:CreateGrant"]
+    assert grant["Condition"]["Bool"]["kms:GrantIsForAWSResource"] == "true"
