@@ -1,0 +1,126 @@
+# yaml-language-server: $schema=https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json
+#
+# CodeRabbit config for idlefy/aws-cloudformation.
+# Lives on the default branch (main). Overrides the web-UI settings.
+# Docs: https://docs.coderabbit.ai/guides/configure-coderabbit
+#
+# This repository is small but high-stakes: two CloudFormation templates that an AWS
+# account owner installs to grant Idlefy a role in their own account. A mistake here is
+# an over-broad permission in somebody else's account, or a launch that fails for every
+# user of a published version.
+
+language: en-US
+
+reviews:
+  # chill = real issues over style nitpicks. cfn-lint and the invariant tests already
+  # run in CI, so the reviewer's job is the judgement they cannot make.
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  changed_files_summary: true
+  # No application code flows here; the diagrams add noise to a policy diff.
+  sequence_diagrams: false
+  assess_linked_issues: true
+  related_issues: true
+  related_prs: true
+  suggested_labels: true
+  suggested_reviewers: true
+
+  abort_on_close: true
+
+  auto_review:
+    enabled: true
+    drafts: false
+    ignore_title_keywords:
+      - "WIP"
+      - "DO NOT MERGE"
+    base_branches:
+      - main
+
+  path_filters:
+    - "!**/__pycache__/**"
+    - "!.venv/**"
+
+  path_instructions:
+    - path: "templates/**"
+      instructions: >-
+        CloudFormation templates that create the IAM roles Idlefy assumes in an AWS
+        account that is not ours. Review them as a permission fence, not as YAML.
+
+        Invariants: every Allow on a mutating EC2 action must be conditioned on
+        ec2:ResourceTag/IdlefyManaged=true; every create must be conditioned on
+        aws:RequestTag/IdlefyManaged=true plus aws:RequestedRegion in AllowedRegions;
+        ec2:CreateTags is allowed only through ec2:CreateAction, so the role can never
+        retag anything after the fact and cannot widen its own reach. RunInstances is
+        split per resource type and must keep the network-interface statement fenced on
+        aws:RequestTag — the ENI is created by the call and has no resource tag yet, and
+        without it every launch is denied. KMS may be reachable only through EC2
+        (kms:ViaService) and only for keys owned by the account (kms:CallerAccount);
+        ViaService alone would also admit a key shared in from another account. The
+        explicit Deny on iam:PassRole, instance-profile association,
+        ModifyInstanceAttribute, DeleteTags, sts:* and organizations:* must stay, and so
+        must the Deny outside AllowedRegions.
+
+        One subtlety worth knowing before proposing a narrowing: aws:RequestTag is in the
+        request context ONLY for the resource being tagged. A create that also names a
+        parent resource — CreateSubnet, CreateSecurityGroup and CreateRouteTable all name
+        the VPC — is therefore NOT authorized on the parent by a Resource "*" statement
+        conditioned on aws:RequestTag. The parent is authorized only by CreateInManagedVpc,
+        on the VPC's own tag. Verified by DryRun against the deployed v1.0.1 role.
+
+        Any new action needs a reason in the diff for why it exists and why its condition
+        is sufficient. Flag an action that is added without a fence, and flag a fence that
+        is loosened without the PR saying so.
+
+    - path: "tests/**"
+      instructions: >-
+        These tests are the gate on the templates. test_policy_invariants.py asserts the
+        fence properties directly and should fail before a template change that would
+        break them — a test that passes both before and after is not testing the change.
+        The JSON files under tests/snapshots are the rendered policies: a snapshot diff is
+        the real review surface, so check that every changed statement in it is explained
+        by the PR, and treat an unexplained one as a finding rather than churn.
+
+    - path: ".github/**"
+      instructions: >-
+        Pin third-party actions to a commit SHA. The publish workflow runs on a version
+        tag and uploads the rendered templates to the S3 bucket Idlefy serves cfn-urls
+        from, so a change to it changes what account owners install. Flag any use of
+        untrusted PR input in run steps.
+
+  tools:
+    # IaC static analysis — the highest-value tool in this repo.
+    checkov:
+      enabled: true
+    gitleaks:
+      enabled: true
+    semgrep:
+      enabled: true
+    actionlint:
+      enabled: true
+    ruff:
+      enabled: true
+    # Off to keep a policy diff readable: the templates use CloudFormation short forms
+    # that yamllint dislikes, and the prose linters fire on every doc sentence.
+    yamllint:
+      enabled: false
+    markdownlint:
+      enabled: false
+    languagetool:
+      enabled: false
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "README.md"
+  learnings:
+    scope: auto
+  pull_requests:
+    scope: auto
