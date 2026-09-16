@@ -1,5 +1,32 @@
 # Changelog
 
+## v1.1.0
+
+- `idlefy-provision.yaml`: encrypted root volumes. `EbsEncryptionKms` and `EbsEncryptionKmsGrant`
+  allow `kms:Decrypt`, `kms:DescribeKey`, `kms:GenerateDataKeyWithoutPlaintext`, `kms:ReEncrypt*`
+  and `kms:CreateGrant` (grants for AWS resources only), solely through EC2
+  (`kms:ViaService = ec2.*.amazonaws.com`). Without them a launch with an encrypted root volume
+  succeeded and the instance then terminated with `Client.InvalidKMSKey.*`. A customer-managed
+  default EBS key still needs its key policy to allow the account.
+- `idlefy-provision.yaml`: `EbsEncryptionDefaults` allows `ec2:GetEbsEncryptionByDefault` and
+  `ec2:GetEbsDefaultKmsKeyId` in `AllowedRegions` (not covered by `ec2:Describe*`).
+- `idlefy-provision.yaml`: `DescribeGlobal` also allows `servicequotas:GetAWSDefaultServiceQuota`.
+  `GetServiceQuota` answers only for quotas the account has already changed, so without the
+  default value every EC2 limit Idlefy reports on a fresh account would be unknown.
+- `idlefy-provision.yaml`: the `RunInstancesKeyPair` statement is removed. Idlefy installs SSH
+  keys through cloud-init and never sends `KeyName`, so the role has no reason to name a key
+  pair. Actions kept for later stories (`CreateVolume`, `DeleteVolume`, `RebootInstances`,
+  egress rules, `DeleteRoute`, `GetConsoleOutput`, EC2 Instance Connect, `pricing:GetProducts`,
+  `ssm:GetParameters`) now carry a "reserved for S3/S4" comment saying why they are there.
+- `idlefy-provision.yaml`: `CreateSubnet`, `CreateSecurityGroup` and `CreateRouteTable` moved from
+  `CreateTagged` to `CreateTaggedInVpc`, scoped to their own resource ARNs. With `Resource "*"` the
+  request tag also authorized the parent VPC, so the role could create them in any VPC; the VPC side
+  now always needs `IdlefyManaged=true` on the VPC (`CreateInManagedVpc`).
+- Launching into a VPC you tagged yourself (bring your own network) needs one more statement
+  after this narrowing — a separate consent tag — and is planned for v1.2.0 (Idlefy ID-541).
+  Until then Idlefy only uses networks it created.
+- Update the `Idlefy-Provision` stack in place; parameters and role names are unchanged.
+
 ## v1.0.1
 
 - `idlefy-provision.yaml`: fix every `RunInstances` being denied on `network-interface/*`.

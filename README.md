@@ -24,11 +24,20 @@ The provision role can only act on resources that carry the tag **`IdlefyManaged
   or instance is allowed only when the request tags it `IdlefyManaged=true`
   (`aws:RequestTag`), inside the regions you list (`AllowedRegions`), with an instance type
   from your list (`AllowedInstanceTypes`) and a volume no larger than `MaxVolumeGiB`.
+- A subnet, security group or route table can only be created inside a VPC that already
+  carries the tag; tagging the new resource alone is not enough.
 - Stopping, starting, terminating, deleting, associating or modifying is allowed only on
   resources that already carry the tag (`ec2:ResourceTag`).
 - Instances may only launch into a subnet and security group that carry the tag, from an
   image owned by Canonical or Amazon; the network interface created with the instance must
   be tagged at launch like the instance and its volume.
+- KMS is usable only through EC2 (`kms:ViaService = ec2.*.amazonaws.com`; grants only for AWS
+  resources), which encrypted root volumes need. If your account's default EBS key is a
+  customer-managed key, its key policy must allow the account (the default key policy does).
+  The role can also read the account's EBS encryption defaults and the AWS default value of an
+  EC2 quota your account has never changed.
+- The role can never name an EC2 key pair: Idlefy installs your SSH keys through cloud-init, so
+  no key pair is ever attached to a box.
 - `ec2:CreateTags` works only as part of a create call; the role can never add or remove
   tags afterwards, so it cannot widen its own reach.
 - Explicit `Deny` on `iam:PassRole`, instance-profile association, `ModifyInstanceAttribute`
@@ -44,7 +53,10 @@ rate limits and by your EC2 service quotas.
 
 Tagging one of your existing subnets and a security group with `IdlefyManaged=true` is
 consent for Idlefy to launch dev boxes there. Idlefy never deletes or modifies a network it
-did not create, tag or no tag. (Feature planned; the permission model already supports it.)
+did not create, tag or no tag. (Feature planned.) From v1.1.0 a subnet, security group or
+route table can only be created inside a VPC that carries the tag, so launching into your own
+VPC will need one more statement — a separate consent tag, shipping in v1.2.0 — before Idlefy
+can create its per-box security group there.
 
 ## Compatibility contract with the Idlefy app
 

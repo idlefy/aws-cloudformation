@@ -6,6 +6,7 @@ These fail CI when someone "just adds an action" without the tag/region fence.
 import fnmatch
 
 import pytest
+from render import ACCOUNT_ID  # tests/ is on sys.path (conftest already imports from render)
 
 FENCE_TAG = "IdlefyManaged"
 REQUEST_TAG = f"aws:RequestTag/{FENCE_TAG}"
@@ -29,7 +30,14 @@ REQUIRED_DENIES = {
     "ec2:ModifyInstanceAttribute", "ec2:DeleteTags", "sts:*", "organizations:*",
 }
 # Read-only prefixes that legitimately have no tag condition.
-READ_ONLY = ("ec2:Describe", "ec2:GetConsoleOutput", "servicequotas:", "pricing:", "ssm:Get")
+READ_ONLY = (
+    "ec2:Describe", "ec2:GetConsoleOutput", "ec2:GetEbsEncryptionByDefault", "ec2:GetEbsDefaultKmsKeyId",
+    "servicequotas:", "pricing:", "ssm:Get",
+)
+# Creates whose call also names the parent VPC: the request tag may authorize only the
+# new resource ARN, the VPC side must carry the fence tag (v1.1.0).
+IN_VPC_CREATES = {"ec2:CreateSubnet", "ec2:CreateSecurityGroup", "ec2:CreateRouteTable"}
+KMS_VIA_EC2 = "ec2.*.amazonaws.com"
 
 
 @pytest.fixture(scope="session")
@@ -40,6 +48,11 @@ def statements(provision):
 def _actions(stmt):
     a = stmt["Action"]
     return [a] if isinstance(a, str) else list(a)
+
+
+def _resources(stmt):
+    r = stmt["Resource"]
+    return [r] if isinstance(r, str) else list(r)
 
 
 def _cond_keys(stmt):
@@ -60,6 +73,9 @@ def test_mutating_actions_require_the_resource_tag(statements):
             continue
         for action in _actions(s):
             if action.startswith(READ_ONLY) or action in CREATE_ACTIONS or action == "ec2:CreateTags":
+                continue
+            if action.startswith("kms:"):
+                assert "kms:ViaService" in _cond_keys(s), f"{s['Sid']}: {action} lacks kms:ViaService"
                 continue
             assert RESOURCE_TAG in _cond_keys(s), f"{s['Sid']}: {action} lacks {RESOURCE_TAG}"
 
@@ -172,3 +188,61 @@ def test_fence_tag_key_is_distinct_from_manage_tag(statements, manage):
     }
     assert manage_keys == {"ec2:ResourceTag/idlefy", "ec2:ResourceTag/Idlefy"}
     assert RESOURCE_TAG not in manage_keys
+
+
+def test_in_vpc_creates_never_use_a_wildcard_resource(statements):
+    # v1.0.1 bug: Resource "*" let aws:RequestTag authorize the parent VPC too, so a
+    # session could create subnets / security groups / route tables in any VPC.
+    for s in statements:
+        if s["Effect"] != "Allow" or not IN_VPC_CREATES & set(_actions(s)):
+            continue
+        resources = _resources(s)
+        assert "*" not in resources, s["Sid"]
+        assert all(r.endswith((":subnet/*", ":security-group/*", ":route-table/*", ":vpc/*")) for r in resources), s["Sid"]
+
+
+def test_vpc_side_of_in_vpc_creates_requires_the_managed_tag(statements):
+    vpc_allows = [
+        s for s in statements
+        if s["Effect"] == "Allow" and IN_VPC_CREATES & set(_actions(s)) and any(r.endswith(":vpc/*") for r in _resources(s))
+    ]
+    assert [s["Sid"] for s in vpc_allows] == ["CreateInManagedVpc"]
+    assert RESOURCE_TAG in _cond_keys(vpc_allows[0])
+    assert REQUEST_TAG not in _cond_keys(vpc_allows[0])
+
+
+def test_ebs_encryption_defaults_are_readable_in_allowed_regions(statements):
+    stmt = next(s for s in statements if s["Sid"] == "EbsEncryptionDefaults")
+    assert set(_actions(stmt)) == {"ec2:GetEbsEncryptionByDefault", "ec2:GetEbsDefaultKmsKeyId"}
+    # The rendered region list is whatever AllowedRegions the harness passed, so derive it from
+    # a statement built from the same parameters instead of hard-coding the harness's value.
+    describe = next(s for s in statements if s["Sid"] == "Describe")
+    assert (
+        stmt["Condition"]["StringEquals"]["aws:RequestedRegion"]
+        == describe["Condition"]["StringEquals"]["aws:RequestedRegion"]
+    )
+
+
+def test_no_statement_allows_run_instances_on_a_key_pair(statements):
+    # The provider never sends KeyName (cloud-init installs the keys), so the role has no
+    # business naming a key pair at all. v1.0.0/v1.0.1 carried a RunInstancesKeyPair statement.
+    assert not [s for s in statements if any("key-pair/" in r for r in _resources(s))]
+
+
+def test_kms_is_usable_only_through_ec2(statements):
+    # core-api refuses to launch below template v1.1.0 precisely because these two Sids are what
+    # v1.1.0 adds (ProvisioningFenceError("template_version")); their existence is the contract.
+    kms = [s for s in statements if s["Effect"] == "Allow" and any(a.startswith("kms:") for a in _actions(s))]
+    assert {s["Sid"] for s in kms} == {"EbsEncryptionKms", "EbsEncryptionKmsGrant"}
+    for s in kms:
+        assert s["Condition"]["StringLike"]["kms:ViaService"] == KMS_VIA_EC2, s["Sid"]
+        # Without CallerAccount, ViaService alone still allows a key *shared from another
+        # account* to be used through EC2 — the account's own EBS key is the whole point.
+        assert s["Condition"]["StringEquals"]["kms:CallerAccount"] == ACCOUNT_ID, s["Sid"]
+    use = next(s for s in kms if s["Sid"] == "EbsEncryptionKms")
+    assert set(_actions(use)) == {
+        "kms:Decrypt", "kms:DescribeKey", "kms:GenerateDataKeyWithoutPlaintext", "kms:ReEncrypt*",
+    }
+    grant = next(s for s in kms if s["Sid"] == "EbsEncryptionKmsGrant")
+    assert _actions(grant) == ["kms:CreateGrant"]
+    assert grant["Condition"]["Bool"]["kms:GrantIsForAWSResource"] == "true"
