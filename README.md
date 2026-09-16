@@ -41,6 +41,11 @@ The provision role can only act on resources that carry the tag **`IdlefyManaged
   EC2 quota your account has never changed.
 - The role can never name an EC2 key pair: Idlefy installs your SSH keys through cloud-init, so
   no key pair is ever attached to a box.
+- **Idlefy can never get inside a box.** It starts, stops, terminates and networks your boxes
+  from the outside; it has no way to open a shell, run a command or push an SSH key onto a
+  running instance. `ec2-instance-connect:*` is explicitly denied, so no later policy change
+  can grant it either. (v1.0.0 and v1.0.1 allowed `SendSSHPublicKey`; v1.1.0 removes and then
+  denies it.)
 - `ec2:CreateTags` works only as part of a create call; the role can never add or remove
   tags afterwards, so it cannot widen its own reach.
 - Explicit `Deny` on `iam:PassRole`, instance-profile association, `ModifyInstanceAttribute`

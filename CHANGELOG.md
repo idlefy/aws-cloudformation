@@ -17,11 +17,17 @@
 - `idlefy-provision.yaml`: `DescribeGlobal` also allows `servicequotas:GetAWSDefaultServiceQuota`.
   `GetServiceQuota` answers only for quotas the account has already changed, so without the
   default value every EC2 limit Idlefy reports on a fresh account would be unknown.
+- `idlefy-provision.yaml`: **the role can no longer reach inside a box.** The `InstanceConnect`
+  statement, which allowed `ec2-instance-connect:SendSSHPublicKey` on a managed instance, is
+  removed, and `ec2-instance-connect:*` is added to the unconditional `DenyEscalation` so no
+  later change can grant it back. Idlefy operates boxes from the outside only — start, stop,
+  terminate, network. v1.0.0 and v1.0.1 granted this permission; nothing ever used it.
 - `idlefy-provision.yaml`: the `RunInstancesKeyPair` statement is removed. Idlefy installs SSH
   keys through cloud-init and never sends `KeyName`, so the role has no reason to name a key
   pair. Actions kept for later stories (`CreateVolume`, `DeleteVolume`, `RebootInstances`,
-  egress rules, `DeleteRoute`, `GetConsoleOutput`, EC2 Instance Connect, `pricing:GetProducts`,
-  `ssm:GetParameters`) now carry a "reserved for S3/S4" comment saying why they are there.
+  egress rules, `DeleteRoute`, `GetConsoleOutput`, `pricing:GetProducts`, `ssm:GetParameters`)
+  now carry a "reserved for S3/S4" comment saying why they are there. EC2 Instance Connect was
+  on that list and is not any more — see above.
 - No change to which VPC the role may build in. A narrowing was drafted for this release on the
   assumption that `Resource "*"` on `CreateTagged` let the request tag authorize the parent VPC
   as well; a DryRun against the deployed v1.0.1 role disproved it. `aws:RequestTag` is in the

@@ -269,18 +269,15 @@ Resources:
               StringEquals:
                 ec2:ResourceTag/IdlefyManaged: "true"
 
-          # reserved for S3/S4: browser SSH without the user's own key on the box
-          - Sid: InstanceConnect
-            Effect: Allow
-            Action: ec2-instance-connect:SendSSHPublicKey
-            Resource: arn:aws:ec2:*:*:instance/*
-            Condition:
-              StringEquals:
-                ec2:ResourceTag/IdlefyManaged: "true"
-
           - Sid: DenyEscalation
             Effect: Deny
             Action:
+              # Idlefy must never be able to get inside a box it manages. SendSSHPublicKey
+              # pushes a caller-chosen SSH key onto a running instance, which is exactly that,
+              # so it is denied outright rather than merely left ungranted: a Deny cannot be
+              # undone by a later Allow, here or in any policy attached to this role.
+              # v1.0.0 and v1.0.1 granted it; nothing ever used it.
+              - ec2-instance-connect:*
               - iam:PassRole
               - ec2:AssociateIamInstanceProfile
               - ec2:ReplaceIamInstanceProfileAssociation

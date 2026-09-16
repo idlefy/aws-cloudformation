@@ -24,10 +24,14 @@ FORBIDDEN_ALLOWS = {
     "ec2:ModifyInstanceAttribute", "ec2:DeleteTags",
     "ec2:AssociateIamInstanceProfile", "ec2:ReplaceIamInstanceProfileAssociation",
     "ec2:ModifyLaunchTemplate", "ec2:CreateLaunchTemplate",
+    # Idlefy manages boxes from the outside and never gets inside one. Matched with fnmatch,
+    # so this also forbids allowing SendSSHPublicKey by name.
+    "ec2-instance-connect:*",
 }
 REQUIRED_DENIES = {
     "iam:PassRole", "ec2:AssociateIamInstanceProfile", "ec2:ReplaceIamInstanceProfileAssociation",
     "ec2:ModifyInstanceAttribute", "ec2:DeleteTags", "sts:*", "organizations:*",
+    "ec2-instance-connect:*",
 }
 # Read-only prefixes that legitimately have no tag condition.
 READ_ONLY = (
@@ -188,6 +192,22 @@ def test_fence_tag_key_is_distinct_from_manage_tag(statements, manage):
     }
     assert manage_keys == {"ec2:ResourceTag/idlefy", "ec2:ResourceTag/Idlefy"}
     assert RESOURCE_TAG not in manage_keys
+
+
+def test_the_role_can_never_get_inside_a_box(statements):
+    # Product rule, not a preference: Idlefy operates boxes from the outside — start, stop,
+    # terminate, network — and never has access inside the guest. EC2 Instance Connect pushes a
+    # caller-chosen SSH key onto a running instance, so it is denied unconditionally rather than
+    # simply left out: an Allow added later, here or in another policy on this role, cannot
+    # override a Deny. v1.0.0 and v1.0.1 granted SendSSHPublicKey; nothing ever used it.
+    assert not [
+        s for s in statements
+        if s["Effect"] == "Allow" and any(a.startswith("ec2-instance-connect:") for a in _actions(s))
+    ]
+    unconditional = {
+        a for s in statements if s["Effect"] == "Deny" and "Condition" not in s for a in _actions(s)
+    }
+    assert "ec2-instance-connect:*" in unconditional
 
 
 def test_vpc_side_of_in_vpc_creates_requires_the_managed_tag(statements):

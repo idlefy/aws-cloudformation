@@ -268,18 +268,8 @@
         "Sid": "MutateManaged"
       },
       {
-        "Action": "ec2-instance-connect:SendSSHPublicKey",
-        "Condition": {
-          "StringEquals": {
-            "ec2:ResourceTag/IdlefyManaged": "true"
-          }
-        },
-        "Effect": "Allow",
-        "Resource": "arn:aws:ec2:*:*:instance/*",
-        "Sid": "InstanceConnect"
-      },
-      {
         "Action": [
+          "ec2-instance-connect:*",
           "iam:PassRole",
           "ec2:AssociateIamInstanceProfile",
           "ec2:ReplaceIamInstanceProfileAssociation",
