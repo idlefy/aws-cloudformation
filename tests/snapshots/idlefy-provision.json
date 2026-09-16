@@ -3,8 +3,7 @@
     "Statement": [
       {
         "Action": [
-          "ec2:Describe*",
-          "ec2:GetConsoleOutput"
+          "ec2:Describe*"
         ],
         "Condition": {
           "StringEquals": {
@@ -270,6 +269,7 @@
       {
         "Action": [
           "ec2-instance-connect:*",
+          "ec2:GetConsole*",
           "iam:PassRole",
           "ec2:AssociateIamInstanceProfile",
           "ec2:ReplaceIamInstanceProfileAssociation",

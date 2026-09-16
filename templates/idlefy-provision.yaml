@@ -62,7 +62,6 @@ Resources:
             Effect: Allow
             Action:
               - ec2:Describe*
-              - ec2:GetConsoleOutput   # reserved for S3/S4: boot diagnostics for a stuck box
             Resource: "*"
             Condition:
               StringEquals:
@@ -272,12 +271,15 @@ Resources:
           - Sid: DenyEscalation
             Effect: Deny
             Action:
-              # Idlefy must never be able to get inside a box it manages. SendSSHPublicKey
-              # pushes a caller-chosen SSH key onto a running instance, which is exactly that,
-              # so it is denied outright rather than merely left ungranted: a Deny cannot be
-              # undone by a later Allow, here or in any policy attached to this role.
-              # v1.0.0 and v1.0.1 granted it; nothing ever used it.
+              # Idlefy must never be able to get inside a box it manages, or to read what is
+              # inside it. SendSSHPublicKey pushes a caller-chosen SSH key onto a running
+              # instance; GetConsoleOutput and GetConsoleScreenshot return the guest's own
+              # output — the boot log, kernel messages, whatever cloud-init printed, the
+              # screen. All are denied outright rather than merely left ungranted: a Deny
+              # cannot be undone by a later Allow, here or in any policy attached to this
+              # role. v1.0.0 and v1.0.1 granted the first two; nothing ever used them.
               - ec2-instance-connect:*
+              - ec2:GetConsole*
               - iam:PassRole
               - ec2:AssociateIamInstanceProfile
               - ec2:ReplaceIamInstanceProfileAssociation

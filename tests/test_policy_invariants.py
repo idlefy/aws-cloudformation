@@ -27,15 +27,17 @@ FORBIDDEN_ALLOWS = {
     # Idlefy manages boxes from the outside and never gets inside one. Matched with fnmatch,
     # so this also forbids allowing SendSSHPublicKey by name.
     "ec2-instance-connect:*",
+    # Same rule, read side: the console output and screenshot are the guest's own output.
+    "ec2:GetConsole*",
 }
 REQUIRED_DENIES = {
     "iam:PassRole", "ec2:AssociateIamInstanceProfile", "ec2:ReplaceIamInstanceProfileAssociation",
     "ec2:ModifyInstanceAttribute", "ec2:DeleteTags", "sts:*", "organizations:*",
-    "ec2-instance-connect:*",
+    "ec2-instance-connect:*", "ec2:GetConsole*",
 }
 # Read-only prefixes that legitimately have no tag condition.
 READ_ONLY = (
-    "ec2:Describe", "ec2:GetConsoleOutput", "ec2:GetEbsEncryptionByDefault", "ec2:GetEbsDefaultKmsKeyId",
+    "ec2:Describe", "ec2:GetEbsEncryptionByDefault", "ec2:GetEbsDefaultKmsKeyId",
     "servicequotas:", "pricing:", "ssm:Get",
 )
 # Creates whose call also names the parent VPC: the request tag may authorize only the
@@ -200,14 +202,15 @@ def test_the_role_can_never_get_inside_a_box(statements):
     # caller-chosen SSH key onto a running instance, so it is denied unconditionally rather than
     # simply left out: an Allow added later, here or in another policy on this role, cannot
     # override a Deny. v1.0.0 and v1.0.1 granted SendSSHPublicKey; nothing ever used it.
+    inside = ("ec2-instance-connect:", "ec2:GetConsole")
     assert not [
         s for s in statements
-        if s["Effect"] == "Allow" and any(a.startswith("ec2-instance-connect:") for a in _actions(s))
+        if s["Effect"] == "Allow" and any(a.startswith(inside) for a in _actions(s))
     ]
     unconditional = {
         a for s in statements if s["Effect"] == "Deny" and "Condition" not in s for a in _actions(s)
     }
-    assert "ec2-instance-connect:*" in unconditional
+    assert {"ec2-instance-connect:*", "ec2:GetConsole*"} <= unconditional
 
 
 def test_vpc_side_of_in_vpc_creates_requires_the_managed_tag(statements):
