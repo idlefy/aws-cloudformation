@@ -5,7 +5,11 @@
 - `idlefy-provision.yaml`: encrypted root volumes. `EbsEncryptionKms` and `EbsEncryptionKmsGrant`
   allow `kms:Decrypt`, `kms:DescribeKey`, `kms:GenerateDataKeyWithoutPlaintext`, `kms:ReEncrypt*`
   and `kms:CreateGrant` (grants for AWS resources only), solely through EC2
-  (`kms:ViaService = ec2.*.amazonaws.com`). Without them a launch with an encrypted root volume
+  (`kms:ViaService = ec2.*.amazonaws.com`) and only on keys in this account — both statements
+  are scoped to `arn:aws:kms:*:<account>:key/*`, so a key shared in from another account cannot
+  be used even if its key policy allows it. (`kms:CallerAccount` is kept as the documented
+  pairing for `ViaService`, but it matches the *caller's* account and cannot restrict the key's
+  owner; the ARN is what does.) Without these statements a launch with an encrypted root volume
   succeeded and the instance then terminated with `Client.InvalidKMSKey.*`. A customer-managed
   default EBS key still needs its key policy to allow the account.
 - `idlefy-provision.yaml`: `EbsEncryptionDefaults` allows `ec2:GetEbsEncryptionByDefault` and
@@ -24,9 +28,11 @@
   request context only for the resource being tagged, so `CreateSubnet` into an untagged VPC is
   already denied on the `vpc/*` resource, with no statement matching it. `CreateInManagedVpc` is
   and was the only authority for the VPC side. An invariant test now pins that property.
-- Launching into a VPC you tagged yourself (bring your own network) needs one more statement —
-  a separate consent tag — and is planned for v1.2.0 (Idlefy ID-541). Until then Idlefy only
-  uses networks it created. This is unchanged by v1.1.0.
+- Unchanged by v1.1.0, restated because it is easy to misread: the launch statements already
+  accept any subnet and security group tagged `IdlefyManaged=true`, whoever created them. What
+  is missing for bring-your-own-network is the per-box security group Idlefy creates per box —
+  creating one inside a VPC needs that VPC to carry the tag — so it needs one more statement, a
+  separate consent tag, planned for v1.2.0 (Idlefy ID-541).
 - Update the `Idlefy-Provision` stack in place; parameters and role names are unchanged.
 
 ## v1.0.1

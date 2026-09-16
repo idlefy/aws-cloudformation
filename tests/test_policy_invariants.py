@@ -232,8 +232,12 @@ def test_kms_is_usable_only_through_ec2(statements):
     assert {s["Sid"] for s in kms} == {"EbsEncryptionKms", "EbsEncryptionKmsGrant"}
     for s in kms:
         assert s["Condition"]["StringLike"]["kms:ViaService"] == KMS_VIA_EC2, s["Sid"]
-        # Without CallerAccount, ViaService alone still allows a key *shared from another
-        # account* to be used through EC2 — the account's own EBS key is the whole point.
+        # The account-scoped Resource is what keeps this to the account's OWN keys. A
+        # condition cannot do it: kms:CallerAccount matches the account of the caller, which
+        # in a role policy is always this account, so it never excludes a key owned elsewhere
+        # (AWS uses it in KEY policies, where the caller is the unknown). Without the ARN a
+        # key shared into this account from another account would be usable through EC2.
+        assert _resources(s) == [f"arn:aws:kms:*:{ACCOUNT_ID}:key/*"], s["Sid"]
         assert s["Condition"]["StringEquals"]["kms:CallerAccount"] == ACCOUNT_ID, s["Sid"]
     use = next(s for s in kms if s["Sid"] == "EbsEncryptionKms")
     assert set(_actions(use)) == {

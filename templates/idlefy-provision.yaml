@@ -187,8 +187,12 @@ Resources:
           # EBS key. Without these a launch or start succeeds and the instance then stops or
           # terminates with Client.InvalidKMSKey.* (the permissions boundary equals this
           # policy). A customer-managed key must also allow the account in its key policy.
-          # kms:CallerAccount pins Resource "*" to keys owned by this account: ViaService alone
-          # would also cover a key shared into the account from somewhere else.
+          # What limits these to YOUR OWN keys is the Resource ARN, not a condition:
+          # kms:CallerAccount matches the account of the CALLER, which in a role policy is
+          # always this account, so it can never exclude a key owned elsewhere. It is kept
+          # because it is the documented pairing for ViaService, but the account-scoped ARN
+          # is the control: without it, a key shared into this account from another account
+          # could be used through EC2.
           - Sid: EbsEncryptionKms
             Effect: Allow
             Action:
@@ -196,7 +200,7 @@ Resources:
               - kms:DescribeKey
               - kms:GenerateDataKeyWithoutPlaintext
               - kms:ReEncrypt*
-            Resource: "*"
+            Resource: !Sub arn:aws:kms:*:${AWS::AccountId}:key/*
             Condition:
               StringLike:
                 kms:ViaService: ec2.*.amazonaws.com
@@ -206,7 +210,7 @@ Resources:
           - Sid: EbsEncryptionKmsGrant
             Effect: Allow
             Action: kms:CreateGrant
-            Resource: "*"
+            Resource: !Sub arn:aws:kms:*:${AWS::AccountId}:key/*
             Condition:
               StringLike:
                 kms:ViaService: ec2.*.amazonaws.com

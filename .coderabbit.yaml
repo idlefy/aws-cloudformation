@@ -58,8 +58,11 @@ reviews:
         split per resource type and must keep the network-interface statement fenced on
         aws:RequestTag — the ENI is created by the call and has no resource tag yet, and
         without it every launch is denied. KMS may be reachable only through EC2
-        (kms:ViaService) and only for keys owned by the account (kms:CallerAccount);
-        ViaService alone would also admit a key shared in from another account. The
+        (kms:ViaService) and only on keys owned by the account — and what enforces that is an
+        account-scoped Resource ARN, never a condition: kms:CallerAccount matches the account
+        of the CALLER, which in a role policy is always this account, so it cannot exclude a
+        key owned elsewhere (AWS uses it in key policies, where the caller is the unknown).
+        Flag a KMS statement with Resource "*" even when kms:CallerAccount is present. The
         explicit Deny on iam:PassRole, instance-profile association,
         ModifyInstanceAttribute, DeleteTags, sts:* and organizations:* must stay, and so
         must the Deny outside AllowedRegions.
