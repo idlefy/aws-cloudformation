@@ -279,3 +279,6 @@ def test_ipv6_blocks_can_be_added_to_managed_vpcs_and_subnets_only(statements):
         assert allows, f"{action} is not allowed"
         for s in allows:
             assert RESOURCE_TAG in _cond_keys(s), f"{s['Sid']}: {action} lacks {RESOURCE_TAG}"
+            # Exactly "true": a value list such as ["true", "false"] is an OR and would let an
+            # unmanaged (IdlefyManaged=false) VPC or subnet through.
+            assert s["Condition"]["StringEquals"][RESOURCE_TAG] == "true", s["Sid"]
