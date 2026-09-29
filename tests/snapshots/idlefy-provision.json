@@ -237,6 +237,8 @@
           "ec2:RebootInstances",
           "ec2:DeleteVpc",
           "ec2:ModifyVpcAttribute",
+          "ec2:AssociateVpcCidrBlock",
+          "ec2:AssociateSubnetCidrBlock",
           "ec2:DeleteSubnet",
           "ec2:ModifySubnetAttribute",
           "ec2:DeleteInternetGateway",

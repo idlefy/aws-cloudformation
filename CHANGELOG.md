@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.2.0
+
+- `idlefy-provision.yaml`: **dual-stack (IPv6) dev boxes.** `MutateManaged` also allows
+  `ec2:AssociateVpcCidrBlock` and `ec2:AssociateSubnetCidrBlock`, under the same
+  `ec2:ResourceTag/IdlefyManaged = "true"` condition as every other change to the network.
+  A network Idlefy built before IPv6 gets its Amazon-provided /56 (VPC) and a /64 per subnet
+  through them. A network built from now on gets both blocks inside `CreateVpc` and
+  `CreateSubnet`, which v1.1.0 already allows, so a fresh account works dual-stack on v1.1.0
+  too; only upgrading an existing network needs v1.2.0. Amazon-provided blocks come from no
+  customer pool, so no `ipv6pool-ec2` or IPAM resource is named. The `::/0` default route
+  (`CreateRoute`), the instance's IPv6 address (`RunInstances` with `Ipv6AddressCount`) and
+  IPv6 security-group rules use actions v1.1.0 already grants.
+- The "bring your own network" consent statement moves to a later minor version.
+
 ## v1.1.0
 
 - `idlefy-provision.yaml`: encrypted root volumes. `EbsEncryptionKms` and `EbsEncryptionKmsGrant`
