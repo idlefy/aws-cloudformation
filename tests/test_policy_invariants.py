@@ -269,3 +269,13 @@ def test_kms_is_usable_only_through_ec2(statements):
     grant = next(s for s in kms if s["Sid"] == "EbsEncryptionKmsGrant")
     assert _actions(grant) == ["kms:CreateGrant"]
     assert grant["Condition"]["Bool"]["kms:GrantIsForAWSResource"] == "true"
+
+
+def test_ipv6_blocks_can_be_added_to_managed_vpcs_and_subnets_only(statements):
+    """v1.2.0: an owned network that predates dual-stack gets its Amazon-provided IPv6 blocks
+    through Associate*CidrBlock — only on a VPC or subnet carrying the managed tag."""
+    for action in ("ec2:AssociateVpcCidrBlock", "ec2:AssociateSubnetCidrBlock"):
+        allows = [s for s in statements if s["Effect"] == "Allow" and action in _actions(s)]
+        assert allows, f"{action} is not allowed"
+        for s in allows:
+            assert RESOURCE_TAG in _cond_keys(s), f"{s['Sid']}: {action} lacks {RESOURCE_TAG}"

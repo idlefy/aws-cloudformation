@@ -243,6 +243,10 @@ Resources:
               - ec2:RebootInstances   # reserved for S3/S4: "restart my box"
               - ec2:DeleteVpc
               - ec2:ModifyVpcAttribute
+              # v1.2.0: dual-stack. A network Idlefy built before IPv6 gets its Amazon-provided
+              # /56 (VPC) and /64 (subnet) here; a new network gets them at CreateVpc/CreateSubnet.
+              - ec2:AssociateVpcCidrBlock
+              - ec2:AssociateSubnetCidrBlock
               - ec2:DeleteSubnet
               - ec2:ModifySubnetAttribute
               - ec2:DeleteInternetGateway

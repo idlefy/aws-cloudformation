@@ -69,7 +69,7 @@ it. (Feature planned.)
 What is still missing for your own VPC is the per-box security group Idlefy creates for each
 box: a security group, subnet or route table can only be created inside a VPC that itself
 carries the tag — true since v1.0.0, unchanged here — so building in your VPC needs one more
-statement, a separate consent tag, planned for v1.2.0.
+statement, a separate consent tag, planned for a later minor version.
 
 ## Compatibility contract with the Idlefy app
 
