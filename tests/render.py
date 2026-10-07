@@ -17,6 +17,7 @@ import yaml
 TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
 ACCOUNT_ID = "123456789012"
 REGION = "us-east-1"
+STACK_NAME = "Idlefy-Provision"
 
 
 class _Tag:
@@ -67,6 +68,8 @@ class Renderer:
             return ACCOUNT_ID
         if name == "AWS::Region":
             return REGION
+        if name == "AWS::StackName":
+            return STACK_NAME
         if name == "AWS::NoValue":
             return _NOVALUE
         if name in self.params:

@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.3.0
+
+- `idlefy-provision.yaml`: **Debian images.** `RunInstancesImage` also allows images owned by
+  Debian (`136693071363`), and `ImageLookup` (was `UbuntuAmiLookup`) also reads Debian's public
+  parameters under `/aws/service/debian/release/*`.
+- `idlefy-provision.yaml`: **your own images.** `RunInstancesImage` also allows images owned by
+  the account the stack is deployed in (`ec2:Owner` = this account id). An image shared in from
+  another account, a public image of another owner and a Marketplace image stay denied.
+- `idlefy-provision.yaml`: **the role can read this stack.** New `ReadOwnStack` allows
+  `cloudformation:DescribeStacks` on this one stack. Idlefy compares `AllowedRegions`,
+  `AllowedInstanceTypes` and `MaxVolumeGiB` with what it has stored and warns when they differ.
+  It is the only CloudFormation action the role has.
+
 ## v1.2.0
 
 - `idlefy-provision.yaml`: **dual-stack (IPv6) dev boxes.** `MutateManaged` also allows

@@ -90,12 +90,25 @@ Resources:
               StringEquals:
                 aws:RequestedRegion: !Ref AllowedRegions
 
-          - Sid: UbuntuAmiLookup
+          # The public parameters the image publishers keep pointed at their latest AMI:
+          # Canonical (Ubuntu) and, since v1.3.0, Debian. Public parameters have no account id.
+          - Sid: ImageLookup
             Effect: Allow
             Action:
               - ssm:GetParameter
               - ssm:GetParameters   # reserved for S3/S4: resolving several AMIs in one call
-            Resource: arn:aws:ssm:*::parameter/aws/service/canonical/ubuntu/*
+            Resource:
+              - arn:aws:ssm:*::parameter/aws/service/canonical/ubuntu/*
+              - arn:aws:ssm:*::parameter/aws/service/debian/release/*
+
+          # v1.3.0: Idlefy reads the parameters of THIS stack (AllowedRegions,
+          # AllowedInstanceTypes, MaxVolumeGiB) and warns you when they differ from what it
+          # has stored. Read-only, this one stack only. The trailing /* is required: a call
+          # that names the stack matches only an ARN that ends in a wildcard.
+          - Sid: ReadOwnStack
+            Effect: Allow
+            Action: cloudformation:DescribeStacks
+            Resource: !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/*
 
           # Resource "*" does NOT let the request tag authorize the parent VPC of a
           # CreateSubnet / CreateSecurityGroup / CreateRouteTable call: aws:RequestTag is in the
@@ -177,10 +190,15 @@ Resources:
             Action: ec2:RunInstances
             Resource: arn:aws:ec2:*::image/*
             Condition:
+              # Whose images may be launched: Canonical (Ubuntu), Amazon, Debian (v1.3.0) and
+              # this account's own images (v1.3.0, "custom images"). Never an image shared in
+              # from another account, and never a Marketplace image.
               StringEquals:
                 ec2:Owner:
                   - "099720109477"
                   - amazon
+                  - "136693071363"
+                  - !Ref "AWS::AccountId"
 
           # Encrypted root volumes: EC2 calls KMS on the caller's behalf with the account's
           # EBS key. Without these a launch or start succeeds and the instance then stops or

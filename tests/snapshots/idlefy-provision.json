@@ -51,8 +51,17 @@
           "ssm:GetParameters"
         ],
         "Effect": "Allow",
-        "Resource": "arn:aws:ssm:*::parameter/aws/service/canonical/ubuntu/*",
-        "Sid": "UbuntuAmiLookup"
+        "Resource": [
+          "arn:aws:ssm:*::parameter/aws/service/canonical/ubuntu/*",
+          "arn:aws:ssm:*::parameter/aws/service/debian/release/*"
+        ],
+        "Sid": "ImageLookup"
+      },
+      {
+        "Action": "cloudformation:DescribeStacks",
+        "Effect": "Allow",
+        "Resource": "arn:aws:cloudformation:us-east-1:123456789012:stack/Idlefy-Provision/*",
+        "Sid": "ReadOwnStack"
       },
       {
         "Action": [
@@ -165,7 +174,9 @@
           "StringEquals": {
             "ec2:Owner": [
               "099720109477",
-              "amazon"
+              "amazon",
+              "136693071363",
+              "123456789012"
             ]
           }
         },

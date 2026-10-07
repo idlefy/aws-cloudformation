@@ -6,7 +6,7 @@ These fail CI when someone "just adds an action" without the tag/region fence.
 import fnmatch
 
 import pytest
-from render import ACCOUNT_ID  # tests/ is on sys.path (conftest already imports from render)
+from render import ACCOUNT_ID, REGION, STACK_NAME  # tests/ is on sys.path (conftest already imports from render)
 
 FENCE_TAG = "IdlefyManaged"
 REQUEST_TAG = f"aws:RequestTag/{FENCE_TAG}"
@@ -38,7 +38,7 @@ REQUIRED_DENIES = {
 # Read-only prefixes that legitimately have no tag condition.
 READ_ONLY = (
     "ec2:Describe", "ec2:GetEbsEncryptionByDefault", "ec2:GetEbsDefaultKmsKeyId",
-    "servicequotas:", "pricing:", "ssm:Get",
+    "servicequotas:", "pricing:", "ssm:Get", "cloudformation:DescribeStacks",
 )
 # Creates whose call also names the parent VPC: the request tag may authorize only the
 # new resource ARN, the VPC side must carry the fence tag (v1.1.0).
@@ -142,9 +142,43 @@ def test_run_instances_new_network_interface_requires_request_tag(statements):
     assert eni_allows == [stmt]
 
 
-def test_images_limited_to_canonical_and_amazon(statements):
+def test_images_limited_to_known_publishers_and_this_account(statements):
+    # Canonical, Amazon, Debian, and the account's own images (v1.3.0). Nothing shared in from
+    # another account and no Marketplace: the list is exact, not a superset.
     stmt = next(s for s in statements if s["Sid"] == "RunInstancesImage")
-    assert stmt["Condition"]["StringEquals"]["ec2:Owner"] == ["099720109477", "amazon"]
+    assert stmt["Resource"] == "arn:aws:ec2:*::image/*"
+    assert stmt["Condition"] == {
+        "StringEquals": {"ec2:Owner": ["099720109477", "amazon", "136693071363", ACCOUNT_ID]}
+    }
+    image_allows = [
+        s for s in statements
+        if s["Effect"] == "Allow" and "ec2:RunInstances" in _actions(s) and any("image/" in r for r in _resources(s))
+    ]
+    assert [s["Sid"] for s in image_allows] == ["RunInstancesImage"]
+
+
+def test_image_lookup_reads_only_the_publishers_public_parameters(statements):
+    stmt = next(s for s in statements if s["Sid"] == "ImageLookup")
+    assert set(_actions(stmt)) == {"ssm:GetParameter", "ssm:GetParameters"}
+    assert _resources(stmt) == [
+        "arn:aws:ssm:*::parameter/aws/service/canonical/ubuntu/*",
+        "arn:aws:ssm:*::parameter/aws/service/debian/release/*",
+    ]
+    ssm_allows = [s["Sid"] for s in statements if s["Effect"] == "Allow" and any(a.startswith("ssm:") for a in _actions(s))]
+    assert ssm_allows == ["ImageLookup"]
+
+
+def test_cloudformation_access_is_one_read_of_this_stack(statements):
+    # v1.3.0 (Idlefy ID-552): the role reads its own stack's parameters and nothing else in
+    # CloudFormation. The ARN names the stack and ends in /*: a by-name call matches no other form.
+    cfn_allows = [
+        s for s in statements
+        if s["Effect"] == "Allow" and any(a.lower().startswith("cloudformation:") for a in _actions(s))
+    ]
+    assert [s["Sid"] for s in cfn_allows] == ["ReadOwnStack"]
+    stmt = cfn_allows[0]
+    assert _actions(stmt) == ["cloudformation:DescribeStacks"]
+    assert stmt["Resource"] == f"arn:aws:cloudformation:{REGION}:{ACCOUNT_ID}:stack/{STACK_NAME}/*"
 
 
 def test_create_tags_only_inside_create_actions(statements):
