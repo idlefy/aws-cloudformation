@@ -73,7 +73,11 @@ Resources:
       ManagedPolicyName: !Sub
         - IdlefyProvisionPolicy-${Suffix}
         - Suffix: !Join ["", [!Select [0, !Split ["-", !Ref OrgId]], !Select [1, !Split ["-", !Ref OrgId]]]]
-      Description: Fence for the Idlefy provision role - tag-scoped create/mutate, allowlisted regions; instance types are limited on the role.
+      # NEVER edit this text. CloudFormation replaces a managed policy whose Description (or
+      # name, or path) changes, and a policy with a fixed name cannot be replaced: the update
+      # fails with "already exists" and rolls back. v1.4.0 reworded it and could not update any
+      # existing stack. It still says "and instance types" although that list moved to the role.
+      Description: Fence for the Idlefy provision role - tag-scoped create/mutate, allowlisted regions and instance types.
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
