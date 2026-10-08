@@ -42,6 +42,11 @@ def provision():
     return render("idlefy-provision.yaml", PROVISION_PARAMS)
 
 
+@pytest.fixture(scope="session")
+def provision_zone_move():
+    return render("idlefy-provision.yaml", {**PROVISION_PARAMS, "AllowZoneMove": "true"})
+
+
 def assert_snapshot(name: str, value, request):
     """Compare against tests/snapshots/<name>.json; `--snapshot-update` rewrites it."""
     path = SNAPSHOTS / f"{name}.json"

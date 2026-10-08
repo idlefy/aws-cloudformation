@@ -16,12 +16,15 @@ Metadata:
         Parameters: [OrgId, IssuerHost]
       - Label: { default: Limits }
         Parameters: [AllowedRegions, AllowedInstanceTypes, MaxVolumeGiB]
+      - Label: { default: Optional abilities }
+        Parameters: [AllowZoneMove]
     ParameterLabels:
       OrgId: { default: Idlefy organization ID }
       IssuerHost: { default: Idlefy OIDC issuer host }
       AllowedRegions: { default: Regions where Idlefy may create dev boxes }
       AllowedInstanceTypes: { default: Instance types Idlefy may launch }
       MaxVolumeGiB: { default: Largest root volume Idlefy may create (GiB) }
+      AllowZoneMove: { default: Let Idlefy move a dev box to another availability zone }
 
 Parameters:
   OrgId:
@@ -46,6 +49,22 @@ Parameters:
     MinValue: 8
     MaxValue: 16384
     Description: Upper bound for any EBS volume Idlefy creates.
+  AllowZoneMove:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Off by default. When AWS has no capacity for a dev box in its zone, a person can ask
+      Idlefy to move the box to another zone. AWS cannot move a disk between zones, so Idlefy
+      copies it and starts a new instance from the copy. Turning this on therefore lets the
+      Idlefy role copy the disk of a dev box it created and start an instance from that copy:
+      the one ability in this template that touches the data on a box. The copy cannot be
+      shared or exported and is deleted after the move; every step is in your CloudTrail
+      (CreateImage, RunInstances). Leave it off and Idlefy can never reach the data on a box;
+      people can still retry and switch to another allowed machine type.
+
+Conditions:
+  ZoneMove: !Equals [!Ref AllowZoneMove, "true"]
 
 Resources:
   ProvisionPolicy:
@@ -54,18 +73,19 @@ Resources:
       ManagedPolicyName: !Sub
         - IdlefyProvisionPolicy-${Suffix}
         - Suffix: !Join ["", [!Select [0, !Split ["-", !Ref OrgId]], !Select [1, !Split ["-", !Ref OrgId]]]]
-      Description: Fence for the Idlefy provision role - tag-scoped create/mutate, allowlisted regions and instance types.
+      Description: Fence for the Idlefy provision role - tag-scoped create/mutate, allowlisted regions; instance types are limited on the role.
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
+          # v1.4.0: no statement below repeats the region list. DenyOutsideAllowedRegions, at the
+          # end, denies every EC2 call outside AllowedRegions, and a deny beats any allow; a copy
+          # of the list on each allow only spent this policy's size budget (IAM caps a managed
+          # policy at 6,144 characters, and v1.3.0 went over it at 20 regions and 50 types).
           - Sid: Describe
             Effect: Allow
             Action:
               - ec2:Describe*
             Resource: "*"
-            Condition:
-              StringEquals:
-                aws:RequestedRegion: !Ref AllowedRegions
 
           - Sid: DescribeGlobal
             Effect: Allow
@@ -86,9 +106,6 @@ Resources:
               - ec2:GetEbsEncryptionByDefault
               - ec2:GetEbsDefaultKmsKeyId
             Resource: "*"
-            Condition:
-              StringEquals:
-                aws:RequestedRegion: !Ref AllowedRegions
 
           # The public parameters the image publishers keep pointed at their latest AMI:
           # Canonical (Ubuntu) and, since v1.3.0, Debian. Public parameters have no account id.
@@ -126,11 +143,14 @@ Resources:
               - ec2:CreateSecurityGroup
               - ec2:AllocateAddress
               - ec2:CreateVolume   # reserved for S3/S4: extra data volumes
+              # v1.4.0, only with AllowZoneMove: the image and the snapshot behind it that
+              # CreateImage makes when a dev box is moved to another zone. Both must be tagged
+              # IdlefyManaged at creation.
+              - !If [ZoneMove, "ec2:CreateImage", !Ref "AWS::NoValue"]
             Resource: "*"
             Condition:
               StringEquals:
                 aws:RequestTag/IdlefyManaged: "true"
-                aws:RequestedRegion: !Ref AllowedRegions
 
           - Sid: CreateInManagedVpc
             Effect: Allow
@@ -143,6 +163,9 @@ Resources:
               StringEquals:
                 ec2:ResourceTag/IdlefyManaged: "true"
 
+          # v1.4.0: WHICH instance types may be launched is no longer stated here. It is a deny in
+          # the role's own policy (IdlefyProvisionLimits, below), so the list is rendered outside
+          # this size-capped document.
           - Sid: RunInstancesInstance
             Effect: Allow
             Action: ec2:RunInstances
@@ -150,8 +173,47 @@ Resources:
             Condition:
               StringEquals:
                 aws:RequestTag/IdlefyManaged: "true"
-                aws:RequestedRegion: !Ref AllowedRegions
-                ec2:InstanceType: !Ref AllowedInstanceTypes
+
+          # v1.4.0, only with AllowZoneMove: moving a dev box to another zone. AWS cannot move a
+          # disk between zones, so Idlefy copies it: an image of the box, a new instance from
+          # that image in the other zone, then the image and its snapshot are deleted. The
+          # source must be an instance Idlefy created, and no snapshot Idlefy did not create
+          # can be pulled into the image (verified: denied on the snapshot). The copy cannot
+          # leave this account (sharing is denied outright below, copying and exporting are not
+          # granted) and cannot be read block by block (ebs:* is denied below).
+          # What this DOES make possible, and why it is opt-in: the role can start an instance
+          # from the copy, and IAM has no way to limit the user data of a launch. A role that
+          # can move a box can therefore, in principle, boot a copy of its disk with a startup
+          # script of its choosing. Idlefy starts the copy with a fixed user data that only
+          # keeps the SSH host keys; the CreateImage -> RunInstances pair is in CloudTrail.
+          # IAM also has no condition on the state of the source instance, so "the box is
+          # stopped first" is what Idlefy does, not what this statement enforces.
+          - !If
+            - ZoneMove
+            - Sid: CopyDiskOfManagedInstance
+              Effect: Allow
+              Action: ec2:CreateImage
+              Resource: arn:aws:ec2:*:*:instance/*
+              Condition:
+                StringEquals:
+                  ec2:ResourceTag/IdlefyManaged: "true"
+            - !Ref "AWS::NoValue"
+
+          # v1.4.0: changing the machine type of a stopped dev box. ModifyInstanceAttribute can
+          # also replace the user data (code that runs inside the box on its next boot), swap
+          # security groups and lift termination protection, so it is opened for exactly one
+          # attribute: the request must carry InstanceType (the Null test), on an instance
+          # Idlefy created. DenyOtherInstanceAttributes below denies every other use, and
+          # IdlefyProvisionLimits on the role denies a type outside AllowedInstanceTypes.
+          - Sid: ChangeInstanceType
+            Effect: Allow
+            Action: ec2:ModifyInstanceAttribute
+            Resource: arn:aws:ec2:*:*:instance/*
+            Condition:
+              StringEquals:
+                ec2:ResourceTag/IdlefyManaged: "true"
+              "Null":
+                ec2:Attribute/InstanceType: "false"
 
           - Sid: RunInstancesVolume
             Effect: Allow
@@ -160,7 +222,6 @@ Resources:
             Condition:
               StringEquals:
                 aws:RequestTag/IdlefyManaged: "true"
-                aws:RequestedRegion: !Ref AllowedRegions
               NumericLessThanEquals:
                 ec2:VolumeSize: !Ref MaxVolumeGiB
 
@@ -183,7 +244,6 @@ Resources:
             Condition:
               StringEquals:
                 aws:RequestTag/IdlefyManaged: "true"
-                aws:RequestedRegion: !Ref AllowedRegions
 
           - Sid: RunInstancesImage
             Effect: Allow
@@ -251,6 +311,7 @@ Resources:
                   - CreateSecurityGroup
                   - AllocateAddress
                   - CreateVolume
+                  - !If [ZoneMove, CreateImage, !Ref "AWS::NoValue"]
 
           - Sid: MutateManaged
             Effect: Allow
@@ -290,6 +351,10 @@ Resources:
               - ec2:DisassociateAddress
               - ec2:ReleaseAddress
               - ec2:DeleteVolume   # reserved for S3/S4: detached data volumes
+              # v1.4.0, only with AllowZoneMove: removing the temporary disk copy once the box
+              # runs in its new zone.
+              - !If [ZoneMove, "ec2:DeregisterImage", !Ref "AWS::NoValue"]
+              - !If [ZoneMove, "ec2:DeleteSnapshot", !Ref "AWS::NoValue"]
             Resource: "*"
             Condition:
               StringEquals:
@@ -310,11 +375,28 @@ Resources:
               - iam:PassRole
               - ec2:AssociateIamInstanceProfile
               - ec2:ReplaceIamInstanceProfileAssociation
-              - ec2:ModifyInstanceAttribute
               - ec2:DeleteTags
+              # v1.4.0: an image or a snapshot is never shared with another account and never
+              # read block by block, whether or not AllowZoneMove is on. The first two change
+              # who may use a snapshot or an image; ebs:* is direct access to a snapshot's blocks.
+              - ec2:ModifySnapshotAttribute
+              - ec2:ModifyImageAttribute
+              - ebs:*
               - sts:*
               - organizations:*
             Resource: "*"
+
+          # v1.4.0: replaces the outright deny of ec2:ModifyInstanceAttribute that v1.0.0-v1.3.0
+          # kept in DenyEscalation. Any call that does not carry InstanceType - user data,
+          # security groups, termination protection, source/dest check, every other attribute -
+          # is denied, and no later allow can undo it.
+          - Sid: DenyOtherInstanceAttributes
+            Effect: Deny
+            Action: ec2:ModifyInstanceAttribute
+            Resource: "*"
+            Condition:
+              "Null":
+                ec2:Attribute/InstanceType: "true"
 
           - Sid: DenyOutsideAllowedRegions
             Effect: Deny
@@ -337,6 +419,34 @@ Resources:
       ManagedPolicyArns:
         - !Ref ProvisionPolicy
       PermissionsBoundary: !Ref ProvisionPolicy
+      # v1.4.0: the instance-type limit. It lives here, in the role's own policy, because the
+      # list appears twice and IAM caps the managed policy above at 6,144 characters (a role's
+      # inline policies get 10,240 of their own). Both statements are denies: the permissions
+      # boundary only limits what can be allowed, and an explicit deny holds whatever is
+      # attached to this role later.
+      Policies:
+        - PolicyName: IdlefyProvisionLimits
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: DenyLaunchOutsideAllowedTypes
+                Effect: Deny
+                Action: ec2:RunInstances
+                Resource: arn:aws:ec2:*:*:instance/*
+                Condition:
+                  StringNotEquals:
+                    ec2:InstanceType: !Ref AllowedInstanceTypes
+              # The Null test keeps this statement about type changes only; a call that changes
+              # any other attribute is denied by DenyOtherInstanceAttributes in the fence policy.
+              - Sid: DenyTypeChangeOutsideAllowedTypes
+                Effect: Deny
+                Action: ec2:ModifyInstanceAttribute
+                Resource: "*"
+                Condition:
+                  StringNotEquals:
+                    ec2:Attribute/InstanceType: !Ref AllowedInstanceTypes
+                  "Null":
+                    ec2:Attribute/InstanceType: "false"
       AssumeRolePolicyDocument: !Sub |
         {
           "Version": "2012-10-17",
@@ -366,3 +476,9 @@ Outputs:
   PolicyArn:
     Description: The fence policy, attached to the role and set as its permissions boundary.
     Value: !Ref ProvisionPolicy
+  # v1.4.0: Idlefy reads this through ReadOwnStack to know which version is deployed, and so
+  # whether it may offer changing the machine type. Whether it may offer a move to another
+  # zone it reads from the AllowZoneMove parameter, the same way.
+  TemplateVersion:
+    Description: Version of this template as deployed.
+    Value: __TEMPLATE_VERSION__

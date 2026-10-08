@@ -4,8 +4,10 @@ These fail CI when someone "just adds an action" without the tag/region fence.
 """
 
 import fnmatch
+import json
 
 import pytest
+from conftest import PROVISION_PARAMS, render
 from render import ACCOUNT_ID, REGION, STACK_NAME  # tests/ is on sys.path (conftest already imports from render)
 
 FENCE_TAG = "IdlefyManaged"
@@ -17,13 +19,18 @@ RESOURCE_TAG = f"ec2:ResourceTag/{FENCE_TAG}"
 CREATE_ACTIONS = {
     "ec2:CreateVpc", "ec2:CreateSubnet", "ec2:CreateInternetGateway", "ec2:CreateRouteTable",
     "ec2:CreateSecurityGroup", "ec2:AllocateAddress", "ec2:CreateVolume", "ec2:RunInstances",
+    "ec2:CreateImage",
 }
 # Actions that must never be allowed by this role, regardless of conditions.
 FORBIDDEN_ALLOWS = {
     "iam:*", "iam:PassRole", "sts:*", "organizations:*",
-    "ec2:ModifyInstanceAttribute", "ec2:DeleteTags",
+    "ec2:DeleteTags",
     "ec2:AssociateIamInstanceProfile", "ec2:ReplaceIamInstanceProfileAssociation",
-    "ec2:ModifyLaunchTemplate", "ec2:CreateLaunchTemplate",
+    "ec2:ModifyLaunchTemplate", "ec2:CreateLaunchTemplate", "ec2:CreateFleet", "ec2:DeleteFleets",
+    # A disk copy never leaves the account and is never read: no sharing, no copying, no
+    # block-level reads.
+    "ec2:ModifySnapshotAttribute", "ec2:ModifyImageAttribute", "ec2:CopySnapshot", "ec2:CopyImage",
+    "ebs:*",
     # Idlefy manages boxes from the outside and never gets inside one. Matched with fnmatch,
     # so this also forbids allowing SendSSHPublicKey by name.
     "ec2-instance-connect:*",
@@ -32,9 +39,16 @@ FORBIDDEN_ALLOWS = {
 }
 REQUIRED_DENIES = {
     "iam:PassRole", "ec2:AssociateIamInstanceProfile", "ec2:ReplaceIamInstanceProfileAssociation",
-    "ec2:ModifyInstanceAttribute", "ec2:DeleteTags", "sts:*", "organizations:*",
+    "ec2:DeleteTags", "sts:*", "organizations:*",
     "ec2-instance-connect:*", "ec2:GetConsole*",
+    "ec2:ModifySnapshotAttribute", "ec2:ModifyImageAttribute", "ebs:*",
 }
+INSTANCE_TYPE_ATTRIBUTE = "ec2:Attribute/InstanceType"
+# Granted only when the customer turns AllowZoneMove on (off by default).
+ZONE_MOVE_ACTIONS = {"ec2:CreateImage", "ec2:DeregisterImage", "ec2:DeleteSnapshot"}
+ALLOWED_WILDCARDS = {"ec2:Describe*", "kms:ReEncrypt*"}
+IAM_MANAGED_POLICY_LIMIT = 6144   # non-whitespace characters
+IAM_ROLE_INLINE_LIMIT = 10240     # non-whitespace characters, all inline policies of a role
 # Read-only prefixes that legitimately have no tag condition.
 READ_ONLY = (
     "ec2:Describe", "ec2:GetEbsEncryptionByDefault", "ec2:GetEbsDefaultKmsKeyId",
@@ -46,9 +60,28 @@ IN_VPC_CREATES = {"ec2:CreateSubnet", "ec2:CreateSecurityGroup", "ec2:CreateRout
 KMS_VIA_EC2 = "ec2.*.amazonaws.com"
 
 
+@pytest.fixture(scope="session", params=[False, True], ids=["default", "zone-move"])
+def zone_move(request):
+    """Every invariant below holds for both renderings: AllowZoneMove off (default) and on."""
+    return request.param
+
+
 @pytest.fixture(scope="session")
-def statements(provision):
-    return provision["ProvisionPolicy"]["Properties"]["PolicyDocument"]["Statement"]
+def statements(zone_move, provision, provision_zone_move):
+    resources = provision_zone_move if zone_move else provision
+    return resources["ProvisionPolicy"]["Properties"]["PolicyDocument"]["Statement"]
+
+
+def _limits(resources):
+    (policy,) = resources["ProvisionRole"]["Properties"]["Policies"]
+    assert policy["PolicyName"] == "IdlefyProvisionLimits"
+    return policy["PolicyDocument"]["Statement"]
+
+
+@pytest.fixture(scope="session")
+def limits(provision):
+    """The role's inline policy: the instance-type lists, as explicit denies (v1.4.0)."""
+    return _limits(provision)
 
 
 def _actions(stmt):
@@ -98,6 +131,10 @@ def test_create_actions_require_request_tag_or_managed_parent(statements):
             resources = [resource] if isinstance(resource, str) else resource
             if REQUEST_TAG in keys:
                 continue
+            # The SOURCE of a disk copy is an existing instance: it must be a managed one.
+            if action == "ec2:CreateImage" and resources == ["arn:aws:ec2:*:*:instance/*"]:
+                assert RESOURCE_TAG in keys, s["Sid"]
+                continue
             # RunInstances on referenced resources (subnet/SG/ENI/image/key-pair) and
             # child creates inside a managed VPC are gated differently.
             if action == "ec2:RunInstances" and all(r != "*" and "instance/" not in r and "volume/" not in r for r in resources):
@@ -109,11 +146,103 @@ def test_create_actions_require_request_tag_or_managed_parent(statements):
             pytest.fail(f"{s['Sid']}: {action} is not fenced by {REQUEST_TAG}")
 
 
-def test_run_instances_on_instances_is_type_and_region_limited(statements):
+def test_run_instances_on_instances_requires_the_request_tag(statements):
     stmt = next(s for s in statements if s["Sid"] == "RunInstancesInstance")
-    keys = _cond_keys(stmt)
-    assert {"ec2:InstanceType", "aws:RequestedRegion", REQUEST_TAG} <= keys
-    assert stmt["Condition"]["StringEquals"]["ec2:InstanceType"] == ["m7i.large", "m7i.xlarge", "g6.xlarge"]
+    assert REQUEST_TAG in _cond_keys(stmt)
+
+
+def test_instance_types_are_limited_by_explicit_denies_on_the_role(limits):
+    # v1.4.0: the type lists moved out of the size-capped managed policy into the role's inline
+    # policy, as DENIES — an explicit deny beats every allow, including one in a policy somebody
+    # attaches to the role later.
+    assert all(s["Effect"] == "Deny" for s in limits)
+    launch = next(s for s in limits if s["Sid"] == "DenyLaunchOutsideAllowedTypes")
+    assert _actions(launch) == ["ec2:RunInstances"]
+    assert launch["Resource"] == "arn:aws:ec2:*:*:instance/*"
+    assert launch["Condition"] == {"StringNotEquals": {"ec2:InstanceType": ["m7i.large", "m7i.xlarge", "g6.xlarge"]}}
+    change = next(s for s in limits if s["Sid"] == "DenyTypeChangeOutsideAllowedTypes")
+    assert _actions(change) == ["ec2:ModifyInstanceAttribute"]
+    assert change["Resource"] == "*"
+    assert change["Condition"] == {
+        "StringNotEquals": {INSTANCE_TYPE_ATTRIBUTE: ["m7i.large", "m7i.xlarge", "g6.xlarge"]},
+        "Null": {INSTANCE_TYPE_ATTRIBUTE: "false"},
+    }
+    assert {s["Sid"] for s in limits} == {"DenyLaunchOutsideAllowedTypes", "DenyTypeChangeOutsideAllowedTypes"}
+
+
+def test_the_managed_policy_carries_no_instance_type_list(statements):
+    assert not [s["Sid"] for s in statements if "ec2:InstanceType" in _cond_keys(s)]
+    assert not [
+        s["Sid"] for s in statements
+        if isinstance(s.get("Condition", {}).get("StringEquals", {}).get(INSTANCE_TYPE_ATTRIBUTE), list)
+    ]
+
+
+def test_only_the_type_of_a_managed_instance_can_be_changed(statements):
+    # ModifyInstanceAttribute can also replace the user data (code that runs inside the box on its
+    # next boot), swap security groups and lift termination protection. Exactly one attribute is
+    # opened: the machine type, on a managed instance; every other use of the action is denied.
+    allows = [s for s in statements if s["Effect"] == "Allow" and "ec2:ModifyInstanceAttribute" in _actions(s)]
+    (allow,) = allows
+    assert _actions(allow) == ["ec2:ModifyInstanceAttribute"]
+    assert allow["Resource"] == "arn:aws:ec2:*:*:instance/*"
+    assert allow["Condition"] == {
+        "StringEquals": {RESOURCE_TAG: "true"},
+        "Null": {INSTANCE_TYPE_ATTRIBUTE: "false"},
+    }
+    denies = [s for s in statements if s["Effect"] == "Deny" and "ec2:ModifyInstanceAttribute" in _actions(s)]
+    (deny,) = denies
+    assert _actions(deny) == ["ec2:ModifyInstanceAttribute"]
+    assert deny["Resource"] == "*"
+    assert deny["Condition"] == {"Null": {INSTANCE_TYPE_ATTRIBUTE: "true"}}
+
+
+def test_a_disk_copy_is_made_from_a_managed_instance_and_removed_by_tag(statements, zone_move):
+    allowed = {a for s in statements if s["Effect"] == "Allow" for a in _actions(s)}
+    if not zone_move:
+        # Off by default: nothing that touches the data on a box is granted.
+        assert not allowed & ZONE_MOVE_ACTIONS
+        assert "CopyDiskOfManagedInstance" not in {s["Sid"] for s in statements}
+        return
+    assert ZONE_MOVE_ACTIONS <= allowed
+    source = next(s for s in statements if s["Sid"] == "CopyDiskOfManagedInstance")
+    assert (_actions(source), source["Resource"]) == (["ec2:CreateImage"], "arn:aws:ec2:*:*:instance/*")
+    assert source["Condition"] == {"StringEquals": {RESOURCE_TAG: "true"}}
+    created = next(s for s in statements if s["Sid"] == "CreateTagged")
+    assert "ec2:CreateImage" in _actions(created)   # the image and its snapshot: tagged at creation
+    mutate = next(s for s in statements if s["Sid"] == "MutateManaged")
+    assert {"ec2:DeregisterImage", "ec2:DeleteSnapshot"} <= set(_actions(mutate))
+    assert not allowed & {"ec2:CreateSnapshot", "ec2:CreateSnapshots", "ec2:RegisterImage", "ec2:CopySnapshot"}
+
+
+def test_regions_are_limited_by_the_deny_alone(statements):
+    # The list is rendered once (v1.4.0): DenyOutsideAllowedRegions denies every ec2 call
+    # elsewhere, so a copy on each allow only spent the managed policy's size budget.
+    assert [s["Sid"] for s in statements if "aws:RequestedRegion" in _cond_keys(s)] == ["DenyOutsideAllowedRegions"]
+
+
+def _size(document) -> int:
+    return len(json.dumps(document, separators=(",", ":")))
+
+
+def test_policies_fit_the_iam_size_limits_at_the_largest_fence():
+    # core-api accepts up to 20 regions and 50 instance types. v1.3.0 rendered 7381 characters
+    # there and could not be deployed.
+    regions = [f"ap-southeast-{i}" for i in range(1, 21)]            # the longest region names
+    types = [f"m7i-flex.{i}xlarge" for i in range(10, 60)]           # 16 characters each
+    resources = render(
+        "idlefy-provision.yaml",
+        {
+            **PROVISION_PARAMS,
+            "AllowedRegions": ",".join(regions),
+            "AllowedInstanceTypes": ",".join(types),
+            "AllowZoneMove": "true",   # the larger rendering
+        },
+    )
+    managed = resources["ProvisionPolicy"]["Properties"]["PolicyDocument"]
+    inline = {"Version": "2012-10-17", "Statement": _limits(resources)}
+    assert _size(managed) <= IAM_MANAGED_POLICY_LIMIT, _size(managed)
+    assert _size(inline) <= IAM_ROLE_INLINE_LIMIT, _size(inline)
 
 
 def test_run_instances_volume_size_is_capped(statements):
@@ -132,7 +261,7 @@ def test_run_instances_new_network_interface_requires_request_tag(statements):
     # every launch was denied on network-interface/*).
     stmt = next(s for s in statements if s["Sid"] == "RunInstancesNetworkInterface")
     assert stmt["Resource"] == "arn:aws:ec2:*:*:network-interface/*"
-    assert {REQUEST_TAG, "aws:RequestedRegion"} <= _cond_keys(stmt)
+    assert REQUEST_TAG in _cond_keys(stmt)
     assert RESOURCE_TAG not in _cond_keys(stmt)
     eni_allows = [
         s for s in statements
@@ -181,11 +310,12 @@ def test_cloudformation_access_is_one_read_of_this_stack(statements):
     assert stmt["Resource"] == f"arn:aws:cloudformation:{REGION}:{ACCOUNT_ID}:stack/{STACK_NAME}/*"
 
 
-def test_create_tags_only_inside_create_actions(statements):
+def test_create_tags_only_inside_create_actions(statements, zone_move):
     stmt = next(s for s in statements if "ec2:CreateTags" in _actions(s) and s["Effect"] == "Allow")
-    assert set(stmt["Condition"]["StringEquals"]["ec2:CreateAction"]) == {
-        a.split(":")[1] for a in CREATE_ACTIONS
-    }
+    expected = CREATE_ACTIONS if zone_move else CREATE_ACTIONS - {"ec2:CreateImage"}
+    assert set(stmt["Condition"]["StringEquals"]["ec2:CreateAction"]) == {a.split(":")[1] for a in expected}
+    created = next(s for s in statements if s["Sid"] == "CreateTagged")
+    assert ("ec2:CreateImage" in _actions(created)) is zone_move
 
 
 def test_forbidden_actions_are_never_allowed(statements):
@@ -194,19 +324,33 @@ def test_forbidden_actions_are_never_allowed(statements):
             continue
         for action in _actions(s):
             assert not _matches(action, FORBIDDEN_ALLOWS), f"{s['Sid']} allows {action}"
-            # ec2:* style wildcards must not sneak in on the Allow side.
-            assert action != "ec2:*" and not action.endswith(":*"), f"{s['Sid']} allows wildcard {action}"
+            # A wildcard on the Allow side grants actions nobody listed (ec2:Copy* would grant
+            # CopySnapshot, which no deny covers): only these two are allowed to carry one.
+            if "*" in action or "?" in action:
+                assert action in ALLOWED_WILDCARDS, f"{s['Sid']} allows wildcard {action}"
 
 
 def test_required_denies_present(statements):
-    denied = {a for s in statements if s["Effect"] == "Deny" and "Condition" not in s for a in _actions(s)}
+    # Unconditional and on every resource: a condition or a narrower Resource would void it.
+    denied = {
+        a
+        for s in statements
+        if s["Effect"] == "Deny" and "Condition" not in s and s["Resource"] == "*" and "NotAction" not in s
+        for a in _actions(s)
+    }
     assert REQUIRED_DENIES <= denied
 
 
 def test_region_deny_covers_ec2_and_instance_connect(statements):
     stmt = next(s for s in statements if s["Sid"] == "DenyOutsideAllowedRegions")
+    # Since v1.4.0 this statement is the ONLY region limit, so it is pinned whole: a narrower
+    # Resource, a NotAction or a second condition (conditions AND together) would open every
+    # region.
+    assert stmt["Effect"] == "Deny"
     assert set(_actions(stmt)) == {"ec2:*", "ec2-instance-connect:*"}
-    assert stmt["Condition"]["StringNotEquals"]["aws:RequestedRegion"] == ["eu-central-1", "us-east-1"]
+    assert "NotAction" not in stmt and "NotResource" not in stmt
+    assert stmt["Resource"] == "*"
+    assert stmt["Condition"] == {"StringNotEquals": {"aws:RequestedRegion": ["eu-central-1", "us-east-1"]}}
 
 
 def test_every_ec2_allow_is_region_or_tag_scoped(statements):
@@ -215,8 +359,10 @@ def test_every_ec2_allow_is_region_or_tag_scoped(statements):
             continue
         if not any(a.startswith("ec2") for a in _actions(s)):
             continue
+        if all(a.startswith(READ_ONLY) for a in _actions(s)):
+            continue   # reads: the region deny is what limits them
         keys = _cond_keys(s)
-        assert keys & {"aws:RequestedRegion", RESOURCE_TAG, REQUEST_TAG, "ec2:Owner", "ec2:CreateAction"}, s["Sid"]
+        assert keys & {RESOURCE_TAG, REQUEST_TAG, "ec2:Owner", "ec2:CreateAction"}, s["Sid"]
 
 
 def test_fence_tag_key_is_distinct_from_manage_tag(statements, manage):
@@ -264,16 +410,9 @@ def test_vpc_side_of_in_vpc_creates_requires_the_managed_tag(statements):
     assert REQUEST_TAG not in _cond_keys(vpc_allows[0])
 
 
-def test_ebs_encryption_defaults_are_readable_in_allowed_regions(statements):
+def test_ebs_encryption_defaults_are_readable(statements):
     stmt = next(s for s in statements if s["Sid"] == "EbsEncryptionDefaults")
     assert set(_actions(stmt)) == {"ec2:GetEbsEncryptionByDefault", "ec2:GetEbsDefaultKmsKeyId"}
-    # The rendered region list is whatever AllowedRegions the harness passed, so derive it from
-    # a statement built from the same parameters instead of hard-coding the harness's value.
-    describe = next(s for s in statements if s["Sid"] == "Describe")
-    assert (
-        stmt["Condition"]["StringEquals"]["aws:RequestedRegion"]
-        == describe["Condition"]["StringEquals"]["aws:RequestedRegion"]
-    )
 
 
 def test_no_statement_allows_run_instances_on_a_key_pair(statements):

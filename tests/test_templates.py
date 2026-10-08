@@ -3,6 +3,7 @@
 import json
 
 from conftest import ISSUER_HOST, ORG_ID, ORG_SUFFIX, assert_snapshot, policy_documents
+from render import load_template
 
 ACCOUNT = "123456789012"
 
@@ -72,5 +73,16 @@ def test_snapshot_manage_minimal(manage_no_provider_no_metrics, request):
     assert_snapshot("idlefy-manage-minimal", policy_documents(manage_no_provider_no_metrics), request)
 
 
+def test_provision_stack_reports_its_version():
+    # The app reads this output to decide which actions the deployed role supports; the
+    # publish workflow stamps the placeholder with the tag.
+    outputs = load_template("idlefy-provision.yaml")["Outputs"]
+    assert outputs["TemplateVersion"]["Value"] == "__TEMPLATE_VERSION__"
+
+
 def test_snapshot_provision(provision, request):
     assert_snapshot("idlefy-provision", policy_documents(provision), request)
+
+
+def test_snapshot_provision_zone_move(provision_zone_move, request):
+    assert_snapshot("idlefy-provision-zone-move", policy_documents(provision_zone_move), request)

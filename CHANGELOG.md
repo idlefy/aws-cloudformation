@@ -1,5 +1,46 @@
 # Changelog
 
+## v1.4.0
+
+- `idlefy-provision.yaml`: **change the machine type of a stopped dev box.** New
+  `ChangeInstanceType` allows `ec2:ModifyInstanceAttribute` on an instance tagged
+  `IdlefyManaged=true`, only when the request changes `InstanceType`. `DenyEscalation` no
+  longer denies the action outright; new `DenyOtherInstanceAttributes` denies every call
+  that does not change the type (user data, security groups, termination protection and the
+  rest stay out of reach).
+- `idlefy-provision.yaml`: **move a dev box to another zone, opt-in.** New parameter
+  `AllowZoneMove`, `false` by default. Only when it is `true` the role gets `ec2:CreateImage`
+  on a tagged instance (`CopyDiskOfManagedInstance`), with the image and its snapshot tagged
+  at creation (`CreateTagged`, `CreateTagsOnCreate`), and `ec2:DeregisterImage` and
+  `ec2:DeleteSnapshot` on tagged ones (`MutateManaged`). It is opt-in because it is the one
+  ability that touches the data on a box: a role that can copy a disk and launch an instance
+  from the copy could, in principle, boot that copy with a startup script of its choosing,
+  and IAM cannot limit the user data of a launch. With the parameter off none of these
+  actions is granted. See "Moving a box to another zone" in the README.
+- `idlefy-provision.yaml`: `DenyEscalation` gains `ec2:ModifySnapshotAttribute`,
+  `ec2:ModifyImageAttribute` and `ebs:*`, with or without `AllowZoneMove`: an image or a
+  snapshot can never be shared with another account or read block by block.
+- `idlefy-provision.yaml`: **the instance-type list moved to the role.** New inline policy
+  `IdlefyProvisionLimits` on the role denies `ec2:RunInstances` and a type change outside
+  `AllowedInstanceTypes`. `RunInstancesInstance` no longer carries the list.
+- `idlefy-provision.yaml`: **the region list is stated once.** The allow statements no longer
+  repeat `aws:RequestedRegion`; `DenyOutsideAllowedRegions` already denies every EC2 call
+  elsewhere. Nothing becomes reachable that was not before.
+- Fixes a deployment failure: v1.3.0 rendered a managed policy over IAM's 6,144-character
+  limit with long lists (7,381 characters at 20 regions and 50 instance types). v1.4.0
+  renders 5,596 there with `AllowZoneMove` on, and a test pins both policies under their
+  limits.
+- `idlefy-provision.yaml`: new stack output `TemplateVersion`. Idlefy reads it (through
+  `ReadOwnStack`, v1.3.0) to know which version is deployed.
+- Updating an existing stack in place is enough; the new parameter has a default. During the
+  update CloudFormation replaces the fence policy first and adds `IdlefyProvisionLimits` to
+  the role a few seconds later; between the two the role has no instance-type limit (tags,
+  regions and every deny hold throughout).
+- Verified against live IAM on a scratch role: launch and type change allowed only for listed
+  types; a type change combined with any other attribute is rejected by EC2 itself ("The
+  request must contain a single attribute"); `CreateImage` that names a snapshot Idlefy did
+  not create is denied.
+
 ## v1.3.0
 
 - `idlefy-provision.yaml`: **Debian images.** `RunInstancesImage` also allows images owned by
