@@ -18,8 +18,13 @@
   and IAM cannot limit the user data of a launch. With the parameter off none of these
   actions is granted. See "Moving a box to another zone" in the README.
 - `idlefy-provision.yaml`: `DenyEscalation` gains `ec2:ModifySnapshotAttribute`,
-  `ec2:ModifyImageAttribute` and `ebs:*`, with or without `AllowZoneMove`: an image or a
-  snapshot can never be shared with another account or read block by block.
+  `ec2:ModifyImageAttribute`, `ebs:*`, `ec2:CopySnapshot`, `ec2:CopyImage`,
+  `ec2:CreateStoreImageTask`, `ec2:ExportImage` and `ec2:CreateInstanceExportTask`, with or
+  without `AllowZoneMove`: an image or a snapshot can never be shared with another account,
+  copied, exported to S3 or read block by block.
+- `idlefy-provision.yaml`: new `DenyUserDataChange` denies any `ModifyInstanceAttribute` call
+  that carries user data, so that protection does not rest on EC2's one-attribute-per-call
+  rule alone.
 - `idlefy-provision.yaml`: **the instance-type list moved to the role.** New inline policy
   `IdlefyProvisionLimits` on the role denies `ec2:RunInstances` and a type change outside
   `AllowedInstanceTypes`. `RunInstancesInstance` no longer carries the list.
@@ -28,7 +33,7 @@
   elsewhere. Nothing becomes reachable that was not before.
 - Fixes a deployment failure: v1.3.0 rendered a managed policy over IAM's 6,144-character
   limit with long lists (7,381 characters at 20 regions and 50 instance types). v1.4.0
-  renders 5,596 there with `AllowZoneMove` on, and a test pins both policies under their
+  renders 5,862 there with `AllowZoneMove` on, and a test pins both policies under their
   limits.
 - `idlefy-provision.yaml`: new stack output `TemplateVersion`. Idlefy reads it (through
   `ReadOwnStack`, v1.3.0) to know which version is deployed.

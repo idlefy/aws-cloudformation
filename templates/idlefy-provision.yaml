@@ -382,6 +382,14 @@ Resources:
               - ec2:ModifySnapshotAttribute
               - ec2:ModifyImageAttribute
               - ebs:*
+              # Nor copied or exported: the last three write a disk to an S3 bucket named in the
+              # request, which can belong to another account. None is granted; they are denied
+              # so that no later edit can grant them.
+              - ec2:CopySnapshot
+              - ec2:CopyImage
+              - ec2:CreateStoreImageTask
+              - ec2:ExportImage
+              - ec2:CreateInstanceExportTask
               - sts:*
               - organizations:*
             Resource: "*"
@@ -397,6 +405,19 @@ Resources:
             Condition:
               "Null":
                 ec2:Attribute/InstanceType: "true"
+
+          # The statement above relies on EC2 accepting one attribute per call ("The request
+          # must contain a single attribute", verified 2026-10-08). User data is code that runs
+          # inside the box, so it does not rest on that rule alone: any call that carries it is
+          # denied by IAM itself, whatever else the call carries. (Security groups have no such
+          # condition key; for them the single-attribute rule is the barrier.)
+          - Sid: DenyUserDataChange
+            Effect: Deny
+            Action: ec2:ModifyInstanceAttribute
+            Resource: "*"
+            Condition:
+              "Null":
+                ec2:Attribute/UserData: "false"
 
           - Sid: DenyOutsideAllowedRegions
             Effect: Deny

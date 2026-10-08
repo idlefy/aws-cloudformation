@@ -63,9 +63,26 @@ reviews:
         of the CALLER, which in a role policy is always this account, so it cannot exclude a
         key owned elsewhere (AWS uses it in key policies, where the caller is the unknown).
         Flag a KMS statement with Resource "*" even when kms:CallerAccount is present. The
-        explicit Deny on iam:PassRole, instance-profile association,
-        ModifyInstanceAttribute, DeleteTags, sts:* and organizations:* must stay, and so
-        must the Deny outside AllowedRegions.
+        explicit Deny on iam:PassRole, instance-profile association, DeleteTags, sts:* and
+        organizations:* must stay, and so must the Deny outside AllowedRegions.
+
+        Since v1.4.0 (deliberate, do not flag as a regression):
+        - ModifyInstanceAttribute is open for exactly one attribute, the instance type, on a
+          tagged instance (ChangeInstanceType). What must stay: DenyOtherInstanceAttributes
+          (deny when ec2:Attribute/InstanceType is absent), DenyUserDataChange (deny whenever
+          ec2:Attribute/UserData is present) and the two type-list denies in the role's inline
+          policy IdlefyProvisionLimits. Security groups have no attribute condition key; there
+          the barrier is EC2's one-attribute-per-call rule, and that reliance is stated in the
+          template.
+        - The region list appears ONLY in DenyOutsideAllowedRegions; allow statements carry no
+          aws:RequestedRegion (the managed policy would not fit IAM's 6,144-character limit
+          otherwise). That deny must stay unconditional apart from the region test, on
+          Resource "*". Flag any change to it.
+        - The instance-type list appears ONLY in IdlefyProvisionLimits, as denies.
+        - CreateImage, DeregisterImage and DeleteSnapshot exist only under the ZoneMove
+          condition (parameter AllowZoneMove, default false). Flag any of them, or any other
+          action that reads or copies a disk, granted outside that condition. The denies on
+          sharing, copying, exporting and ebs:* are unconditional and must stay.
 
         One subtlety worth knowing before proposing a narrowing: aws:RequestTag is in the
         request context ONLY for the resource being tagged. A create that also names a

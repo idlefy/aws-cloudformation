@@ -30,6 +30,7 @@ FORBIDDEN_ALLOWS = {
     # A disk copy never leaves the account and is never read: no sharing, no copying, no
     # block-level reads.
     "ec2:ModifySnapshotAttribute", "ec2:ModifyImageAttribute", "ec2:CopySnapshot", "ec2:CopyImage",
+    "ec2:CreateStoreImageTask", "ec2:ExportImage", "ec2:CreateInstanceExportTask",
     "ebs:*",
     # Idlefy manages boxes from the outside and never gets inside one. Matched with fnmatch,
     # so this also forbids allowing SendSSHPublicKey by name.
@@ -42,6 +43,8 @@ REQUIRED_DENIES = {
     "ec2:DeleteTags", "sts:*", "organizations:*",
     "ec2-instance-connect:*", "ec2:GetConsole*",
     "ec2:ModifySnapshotAttribute", "ec2:ModifyImageAttribute", "ebs:*",
+    "ec2:CopySnapshot", "ec2:CopyImage",
+    "ec2:CreateStoreImageTask", "ec2:ExportImage", "ec2:CreateInstanceExportTask",
 }
 INSTANCE_TYPE_ATTRIBUTE = "ec2:Attribute/InstanceType"
 # Granted only when the customer turns AllowZoneMove on (off by default).
@@ -190,11 +193,17 @@ def test_only_the_type_of_a_managed_instance_can_be_changed(statements):
         "StringEquals": {RESOURCE_TAG: "true"},
         "Null": {INSTANCE_TYPE_ATTRIBUTE: "false"},
     }
-    denies = [s for s in statements if s["Effect"] == "Deny" and "ec2:ModifyInstanceAttribute" in _actions(s)]
-    (deny,) = denies
-    assert _actions(deny) == ["ec2:ModifyInstanceAttribute"]
-    assert deny["Resource"] == "*"
-    assert deny["Condition"] == {"Null": {INSTANCE_TYPE_ATTRIBUTE: "true"}}
+    denies = {
+        s["Sid"]: s for s in statements if s["Effect"] == "Deny" and "ec2:ModifyInstanceAttribute" in _actions(s)
+    }
+    assert set(denies) == {"DenyOtherInstanceAttributes", "DenyUserDataChange"}
+    for deny in denies.values():
+        assert _actions(deny) == ["ec2:ModifyInstanceAttribute"]
+        assert deny["Resource"] == "*"
+    assert denies["DenyOtherInstanceAttributes"]["Condition"] == {"Null": {INSTANCE_TYPE_ATTRIBUTE: "true"}}
+    # User data is code inside the box: denied by IAM whenever a call carries it, not only by
+    # EC2's one-attribute-per-call rule.
+    assert denies["DenyUserDataChange"]["Condition"] == {"Null": {"ec2:Attribute/UserData": "false"}}
 
 
 def test_a_disk_copy_is_made_from_a_managed_instance_and_removed_by_tag(statements, zone_move):

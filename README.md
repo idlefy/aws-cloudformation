@@ -53,11 +53,13 @@ The provision role can only act on resources that carry the tag **`IdlefyManaged
   `ModifyInstanceAttribute` the role has: the instance must carry the tag, the request must
   change `InstanceType` and nothing else, and the new type must be in `AllowedInstanceTypes`.
   Every other attribute (user data, security groups, termination protection, ...) is
-  explicitly denied.
+  explicitly denied, and a call that carries user data is denied whatever else it carries.
 - **Moving a box to another zone** (v1.4.0) is off unless you set `AllowZoneMove` to `true`;
   see the section below. With or without it, the role can never share an image or a snapshot
   with another account (`ModifySnapshotAttribute` and `ModifyImageAttribute` are explicitly
-  denied) and never read a snapshot block by block (`ebs:*` is explicitly denied).
+  denied), never copy or export one (`CopySnapshot`, `CopyImage`, `CreateStoreImageTask`,
+  `ExportImage`, `CreateInstanceExportTask` are explicitly denied) and never read a snapshot
+  block by block (`ebs:*` is explicitly denied).
 - Explicit `Deny` on `iam:PassRole`, instance-profile association, `DeleteTags`, `sts:*`,
   `organizations:*`, and on any EC2 call outside `AllowedRegions`.
 - The fence policy is attached to the role **and** set as its permissions boundary, so a

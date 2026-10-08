@@ -267,6 +267,11 @@
           "ec2:ModifySnapshotAttribute",
           "ec2:ModifyImageAttribute",
           "ebs:*",
+          "ec2:CopySnapshot",
+          "ec2:CopyImage",
+          "ec2:CreateStoreImageTask",
+          "ec2:ExportImage",
+          "ec2:CreateInstanceExportTask",
           "sts:*",
           "organizations:*"
         ],
@@ -284,6 +289,17 @@
         "Effect": "Deny",
         "Resource": "*",
         "Sid": "DenyOtherInstanceAttributes"
+      },
+      {
+        "Action": "ec2:ModifyInstanceAttribute",
+        "Condition": {
+          "Null": {
+            "ec2:Attribute/UserData": "false"
+          }
+        },
+        "Effect": "Deny",
+        "Resource": "*",
+        "Sid": "DenyUserDataChange"
       },
       {
         "Action": [
