@@ -73,6 +73,24 @@ def test_snapshot_manage_minimal(manage_no_provider_no_metrics, request):
     assert_snapshot("idlefy-manage-minimal", policy_documents(manage_no_provider_no_metrics), request)
 
 
+def test_properties_that_replace_a_named_iam_resource_never_change(provision, manage):
+    # CloudFormation REPLACES a managed policy when its Description, name or path changes, and
+    # a role when its name or path changes. Every one of these has a fixed name, so a
+    # replacement collides with the resource it replaces ("already exists") and the stack
+    # update rolls back. v1.4.0 reworded the policy description and could not update any
+    # existing stack. These strings are frozen; changing one needs a new resource name.
+    policy = provision["ProvisionPolicy"]["Properties"]
+    assert policy["Description"] == (
+        "Fence for the Idlefy provision role - tag-scoped create/mutate, allowlisted regions and instance types."
+    )
+    assert policy["ManagedPolicyName"] == f"IdlefyProvisionPolicy-{ORG_SUFFIX}"
+    assert "Path" not in policy
+    assert provision["ProvisionRole"]["Properties"]["RoleName"] == f"IdlefyProvision-{ORG_SUFFIX}"
+    assert "Path" not in provision["ProvisionRole"]["Properties"]
+    assert manage["ManageRole"]["Properties"]["RoleName"] == f"IdlefyManage-{ORG_SUFFIX}"
+    assert "Path" not in manage["ManageRole"]["Properties"]
+
+
 def test_provision_stack_reports_its_version():
     # The app reads this output to decide which actions the deployed role supports; the
     # publish workflow stamps the placeholder with the tag.

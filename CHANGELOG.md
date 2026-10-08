@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.4.1
+
+- `idlefy-provision.yaml`: **fixes the update from v1.3.0.** v1.4.0 reworded the
+  `Description` of the fence policy. CloudFormation replaces a managed policy whose
+  description changes, and a policy with a fixed name cannot be replaced, so every update of
+  an existing stack failed with "A policy called IdlefyProvisionPolicy-... already exists"
+  and rolled back (the stack stayed on its previous version, nothing was lost). The
+  description is back to its v1.3.0 text and a test freezes it together with the other
+  properties that would replace a named IAM resource.
+- A stack CREATED from v1.4.0 cannot be updated to v1.4.1 for the same reason (its policy
+  carries the v1.4.0 description): delete it and create it again from v1.4.1.
+- No permission changes. Use v1.4.1 instead of v1.4.0.
+
 ## v1.4.0
 
 - `idlefy-provision.yaml`: **change the machine type of a stopped dev box.** New
@@ -37,7 +50,8 @@
   limits.
 - `idlefy-provision.yaml`: new stack output `TemplateVersion`. Idlefy reads it (through
   `ReadOwnStack`, v1.3.0) to know which version is deployed.
-- Updating an existing stack in place is enough; the new parameter has a default. During the
+- Updating an existing stack in place was meant to be enough, but fails in v1.4.0 — see
+  v1.4.1. The new parameter has a default. During the
   update CloudFormation replaces the fence policy first and adds `IdlefyProvisionLimits` to
   the role a few seconds later; between the two the role has no instance-type limit (tags,
   regions and every deny hold throughout).
