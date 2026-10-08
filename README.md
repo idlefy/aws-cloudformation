@@ -49,11 +49,52 @@ The provision role can only act on resources that carry the tag **`IdlefyManaged
   `GetConsoleOutput`; v1.1.0 removes and then denies both.)
 - `ec2:CreateTags` works only as part of a create call; the role can never add or remove
   tags afterwards, so it cannot widen its own reach.
-- Explicit `Deny` on `iam:PassRole`, instance-profile association, `ModifyInstanceAttribute`
-  (which would bypass the instance-type list), `DeleteTags`, `sts:*`, `organizations:*`, and
-  on any EC2 call outside `AllowedRegions`.
-- The same policy is attached to the role **and** set as its permissions boundary, so a
-  policy attached later by mistake cannot exceed it.
+- **Changing the machine type of a stopped box** (v1.4.0) is the only use of
+  `ModifyInstanceAttribute` the role has: the instance must carry the tag, the request must
+  change `InstanceType` and nothing else, and the new type must be in `AllowedInstanceTypes`.
+  Every other attribute (user data, security groups, termination protection, ...) is
+  explicitly denied, and a call that carries user data is denied whatever else it carries.
+- **Moving a box to another zone** (v1.4.0) is off unless you set `AllowZoneMove` to `true`;
+  see the section below. With or without it, the role can never share an image or a snapshot
+  with another account (`ModifySnapshotAttribute` and `ModifyImageAttribute` are explicitly
+  denied), never copy or export one (`CopySnapshot`, `CopyImage`, `CreateStoreImageTask`,
+  `ExportImage`, `CreateInstanceExportTask` are explicitly denied) and never read a snapshot
+  block by block (`ebs:*` is explicitly denied).
+- Explicit `Deny` on `iam:PassRole`, instance-profile association, `DeleteTags`, `sts:*`,
+  `organizations:*`, and on any EC2 call outside `AllowedRegions`.
+- The fence policy is attached to the role **and** set as its permissions boundary, so a
+  policy attached later by mistake cannot exceed it. The instance-type list is the one limit
+  the boundary does not hold: it is the inline policy below, so do not delete that policy.
+- The instance-type list is enforced by two explicit denies in the role's own inline policy
+  `IdlefyProvisionLimits` (launching, and changing the type, outside `AllowedInstanceTypes`).
+  A deny holds whatever else is attached to the role. The list lives there because IAM caps
+  a managed policy at 6,144 characters; the region list is stated once, in the deny on calls
+  outside `AllowedRegions`. Both policies fit their limits at 20 regions and 50 types, and a
+  test keeps it so.
+
+### Moving a box to another zone (`AllowZoneMove`, off by default)
+
+When AWS has no capacity for a box in its zone, a person can ask Idlefy to move it. AWS cannot
+move a disk between zones, so the move is: an image of the box, a new instance from that image
+in another zone, then the image and its snapshot are deleted.
+
+With `AllowZoneMove = true` the role can:
+
+- make an image of an instance that carries the tag (`ec2:CreateImage`); the image and its
+  snapshot must be tagged `IdlefyManaged=true` in the same call, and a snapshot Idlefy did
+  not create cannot be pulled into the image;
+- delete an image or a snapshot that carries the tag.
+
+What that means, plainly: **this is the one setting that lets the Idlefy role touch the data
+on a box.** The role can already launch instances with a user data of its choosing; with this
+on it can also launch one from a copy of a box's disk, and IAM offers no condition on user
+data. Idlefy starts the copy with a fixed user data that only keeps the box's SSH host keys,
+and stops the box before copying it, but neither is something IAM can enforce. Every move
+leaves `CreateImage` followed by `RunInstances` in your CloudTrail.
+
+With `AllowZoneMove = false` (the default) none of these actions is granted, and "Idlefy can
+never get inside a box, or read what is inside it" holds as a property of the role itself, for
+every box Idlefy created. People can still retry, and switch to another allowed machine type.
 
 What the fence does not limit: the number of instances. That is bounded by Idlefy's own
 rate limits and by your EC2 service quotas.
@@ -77,9 +118,10 @@ statement, a separate consent tag, planned for a later minor version.
 |---|---|---|
 | Role names | `IdlefyManage-<org12>`, `IdlefyProvision-<org12>` where `org12` = first 12 hex chars of the organization UUID (computed inside the template) | major version |
 | Suggested stack names | `Idlefy-Manage`, `Idlefy-Provision` | minor |
-| Parameters | manage: `OrgId`, `IssuerHost`, `CreateOidcProvider`, `IncludeMetrics`; provision: `OrgId`, `IssuerHost`, `AllowedRegions`, `AllowedInstanceTypes`, `MaxVolumeGiB` | major |
+| Parameters | manage: `OrgId`, `IssuerHost`, `CreateOidcProvider`, `IncludeMetrics`; provision: `OrgId`, `IssuerHost`, `AllowedRegions`, `AllowedInstanceTypes`, `MaxVolumeGiB`, `AllowZoneMove` (v1.4.0, default `false`) | major (removing or renaming); minor (adding one that has a default) |
 | Trust conditions | `<issuer>:aud = sts.amazonaws.com`; manage `sub = <OrgId>`, provision `sub = <OrgId>:provision` | major |
 | Fence tag | `IdlefyManaged = true` | major |
+| Provision stack output `TemplateVersion` (since v1.4.0) | the deployed version, e.g. `v1.4.0`; the app reads it to decide which actions the role supports. A stack without it is older than v1.4.0 | major |
 | `CAPABILITY_NAMED_IAM` | required (roles have fixed names); the console shows an acknowledgement checkbox | major |
 | Adding a permission statement | | minor |
 

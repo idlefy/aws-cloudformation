@@ -55,7 +55,8 @@
           "ec2:CreateRouteTable",
           "ec2:CreateSecurityGroup",
           "ec2:AllocateAddress",
-          "ec2:CreateVolume"
+          "ec2:CreateVolume",
+          "ec2:CreateImage"
         ],
         "Condition": {
           "StringEquals": {
@@ -91,6 +92,17 @@
         "Effect": "Allow",
         "Resource": "arn:aws:ec2:*:*:instance/*",
         "Sid": "RunInstancesInstance"
+      },
+      {
+        "Action": "ec2:CreateImage",
+        "Condition": {
+          "StringEquals": {
+            "ec2:ResourceTag/IdlefyManaged": "true"
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "arn:aws:ec2:*:*:instance/*",
+        "Sid": "CopyDiskOfManagedInstance"
       },
       {
         "Action": "ec2:ModifyInstanceAttribute",
@@ -209,7 +221,8 @@
               "CreateRouteTable",
               "CreateSecurityGroup",
               "AllocateAddress",
-              "CreateVolume"
+              "CreateVolume",
+              "CreateImage"
             ]
           }
         },
@@ -245,7 +258,9 @@
           "ec2:AssociateAddress",
           "ec2:DisassociateAddress",
           "ec2:ReleaseAddress",
-          "ec2:DeleteVolume"
+          "ec2:DeleteVolume",
+          "ec2:DeregisterImage",
+          "ec2:DeleteSnapshot"
         ],
         "Condition": {
           "StringEquals": {
