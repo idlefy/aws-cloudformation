@@ -7,18 +7,21 @@ import fnmatch
 import json
 
 import pytest
-from conftest import PROVISION_PARAMS, render
+from conftest import ORG_ID, PROVISION_PARAMS, render
 from render import ACCOUNT_ID, REGION, STACK_NAME  # tests/ is on sys.path (conftest already imports from render)
 
 FENCE_TAG = "IdlefyManaged"
 REQUEST_TAG = f"aws:RequestTag/{FENCE_TAG}"
 RESOURCE_TAG = f"ec2:ResourceTag/{FENCE_TAG}"
+# v1.5.0: the tag a customer puts on a network of their own (VPC and subnets) to attach it.
+ATTACHED_TAG = "ec2:ResourceTag/IdlefyAttached"
+GROUPS_ATTRIBUTE = "ec2:Attribute/Groups"
 
 # Actions that create resources: must be gated on the request tag (or, for
 # child resources created inside a managed VPC, on the parent's resource tag).
 CREATE_ACTIONS = {
     "ec2:CreateVpc", "ec2:CreateSubnet", "ec2:CreateInternetGateway", "ec2:CreateRouteTable",
-    "ec2:CreateSecurityGroup", "ec2:AllocateAddress", "ec2:CreateVolume", "ec2:RunInstances",
+    "ec2:CreateSecurityGroup", "ec2:AllocateAddress", "ec2:RunInstances",
     "ec2:CreateImage",
 }
 # Actions that must never be allowed by this role, regardless of conditions.
@@ -83,7 +86,7 @@ def _limits(resources):
 
 @pytest.fixture(scope="session")
 def limits(provision):
-    """The role's inline policy: the instance-type lists, as explicit denies (v1.4.0)."""
+    """The role's inline policy: the instance-type lists (v1.4.0) and the region list (v1.5.0), as explicit denies."""
     return _limits(provision)
 
 
@@ -141,10 +144,10 @@ def test_create_actions_require_request_tag_or_managed_parent(statements):
             # RunInstances on referenced resources (subnet/SG/ENI/image/key-pair) and
             # child creates inside a managed VPC are gated differently.
             if action == "ec2:RunInstances" and all(r != "*" and "instance/" not in r and "volume/" not in r for r in resources):
-                assert RESOURCE_TAG in keys or "ec2:Owner" in keys or "aws:RequestedRegion" in keys, s["Sid"]
+                assert keys & {RESOURCE_TAG, ATTACHED_TAG, "ec2:Owner"}, s["Sid"]
                 continue
             if all(r.endswith(":vpc/*") for r in resources):
-                assert RESOURCE_TAG in keys, s["Sid"]
+                assert keys & {RESOURCE_TAG, ATTACHED_TAG}, s["Sid"]
                 continue
             pytest.fail(f"{s['Sid']}: {action} is not fenced by {REQUEST_TAG}")
 
@@ -170,7 +173,9 @@ def test_instance_types_are_limited_by_explicit_denies_on_the_role(limits):
         "StringNotEquals": {INSTANCE_TYPE_ATTRIBUTE: ["m7i.large", "m7i.xlarge", "g6.xlarge"]},
         "Null": {INSTANCE_TYPE_ATTRIBUTE: "false"},
     }
-    assert {s["Sid"] for s in limits} == {"DenyLaunchOutsideAllowedTypes", "DenyTypeChangeOutsideAllowedTypes"}
+    assert {s["Sid"] for s in limits} == {
+        "DenyLaunchOutsideAllowedTypes", "DenyTypeChangeOutsideAllowedTypes", "DenyOutsideAllowedRegions",
+    }
 
 
 def test_the_managed_policy_carries_no_instance_type_list(statements):
@@ -181,17 +186,31 @@ def test_the_managed_policy_carries_no_instance_type_list(statements):
     ]
 
 
-def test_only_the_type_of_a_managed_instance_can_be_changed(statements):
+def test_only_the_type_and_the_groups_of_a_managed_instance_can_be_changed(statements):
     # ModifyInstanceAttribute can also replace the user data (code that runs inside the box on its
-    # next boot), swap security groups and lift termination protection. Exactly one attribute is
-    # opened: the machine type, on a managed instance; every other use of the action is denied.
-    allows = [s for s in statements if s["Effect"] == "Allow" and "ec2:ModifyInstanceAttribute" in _actions(s)]
-    (allow,) = allows
-    assert _actions(allow) == ["ec2:ModifyInstanceAttribute"]
-    assert allow["Resource"] == "arn:aws:ec2:*:*:instance/*"
-    assert allow["Condition"] == {
+    # next boot) and lift termination protection. Two attributes are opened, on a managed
+    # instance: the machine type (v1.4.0) and the security-group list (v1.5.0); every other use
+    # of the action is denied.
+    allows = {
+        s["Sid"]: s for s in statements if s["Effect"] == "Allow" and "ec2:ModifyInstanceAttribute" in _actions(s)
+    }
+    assert set(allows) == {"ChangeInstanceType", "SwitchToManagedGroups"}
+    for allow in allows.values():
+        assert _actions(allow) == ["ec2:ModifyInstanceAttribute"]
+    change = allows["ChangeInstanceType"]
+    assert change["Resource"] == "arn:aws:ec2:*:*:instance/*"
+    assert change["Condition"] == {
         "StringEquals": {RESOURCE_TAG: "true"},
         "Null": {INSTANCE_TYPE_ATTRIBUTE: "false"},
+    }
+    # The groups named in the call are resources of the call: the tag condition holds for the
+    # instance AND for every group, so only groups Idlefy created can be attached (verified
+    # live 2026-10-09: a list naming an untagged group is denied on that group).
+    switch = allows["SwitchToManagedGroups"]
+    assert switch["Resource"] == ["arn:aws:ec2:*:*:instance/*", "arn:aws:ec2:*:*:security-group/*"]
+    assert switch["Condition"] == {
+        "StringEquals": {RESOURCE_TAG: "true"},
+        "Null": {INSTANCE_TYPE_ATTRIBUTE: "true"},
     }
     denies = {
         s["Sid"]: s for s in statements if s["Effect"] == "Deny" and "ec2:ModifyInstanceAttribute" in _actions(s)
@@ -199,11 +218,20 @@ def test_only_the_type_of_a_managed_instance_can_be_changed(statements):
     assert set(denies) == {"DenyOtherInstanceAttributes", "DenyUserDataChange"}
     for deny in denies.values():
         assert _actions(deny) == ["ec2:ModifyInstanceAttribute"]
-        assert deny["Resource"] == "*"
-    assert denies["DenyOtherInstanceAttributes"]["Condition"] == {"Null": {INSTANCE_TYPE_ATTRIBUTE: "true"}}
+    # Scoped to instances: the attribute keys exist only on the instance side of the call, so on
+    # "*" this deny would match the security groups of a group change and deny it. Every call
+    # names the instance, so nothing escapes it. Conditions AND: denied when the call carries
+    # neither the type nor the groups.
+    other = denies["DenyOtherInstanceAttributes"]
+    assert other["Resource"] == "arn:aws:ec2:*:*:instance/*"
+    assert other["Condition"] == {"Null": {INSTANCE_TYPE_ATTRIBUTE: "true", GROUPS_ATTRIBUTE: "true"}}
     # User data is code inside the box: denied by IAM whenever a call carries it, not only by
     # EC2's one-attribute-per-call rule.
+    assert denies["DenyUserDataChange"]["Resource"] == "*"
     assert denies["DenyUserDataChange"]["Condition"] == {"Null": {"ec2:Attribute/UserData": "false"}}
+    # The interface-level route to the same change is not granted at all.
+    allowed = {a for s in statements if s["Effect"] == "Allow" for a in _actions(s)}
+    assert "ec2:ModifyNetworkInterfaceAttribute" not in allowed
 
 
 def test_a_disk_copy_is_made_from_a_managed_instance_and_removed_by_tag(statements, zone_move):
@@ -224,10 +252,12 @@ def test_a_disk_copy_is_made_from_a_managed_instance_and_removed_by_tag(statemen
     assert not allowed & {"ec2:CreateSnapshot", "ec2:CreateSnapshots", "ec2:RegisterImage", "ec2:CopySnapshot"}
 
 
-def test_regions_are_limited_by_the_deny_alone(statements):
-    # The list is rendered once (v1.4.0): DenyOutsideAllowedRegions denies every ec2 call
-    # elsewhere, so a copy on each allow only spent the managed policy's size budget.
-    assert [s["Sid"] for s in statements if "aws:RequestedRegion" in _cond_keys(s)] == ["DenyOutsideAllowedRegions"]
+def test_regions_are_limited_by_the_deny_alone(statements, limits):
+    # The list is rendered once: DenyOutsideAllowedRegions denies every ec2 call elsewhere. Since
+    # v1.5.0 it lives in the role's inline policy (size budget of the managed one); a deny holds
+    # from any policy of the role.
+    assert not [s["Sid"] for s in statements if "aws:RequestedRegion" in _cond_keys(s)]
+    assert [s["Sid"] for s in limits if "aws:RequestedRegion" in _cond_keys(s)] == ["DenyOutsideAllowedRegions"]
 
 
 def _size(document) -> int:
@@ -297,7 +327,7 @@ def test_images_limited_to_known_publishers_and_this_account(statements):
 
 def test_image_lookup_reads_only_the_publishers_public_parameters(statements):
     stmt = next(s for s in statements if s["Sid"] == "ImageLookup")
-    assert set(_actions(stmt)) == {"ssm:GetParameter", "ssm:GetParameters"}
+    assert set(_actions(stmt)) == {"ssm:GetParameter"}
     assert _resources(stmt) == [
         "arn:aws:ssm:*::parameter/aws/service/canonical/ubuntu/*",
         "arn:aws:ssm:*::parameter/aws/service/debian/release/*",
@@ -350,8 +380,8 @@ def test_required_denies_present(statements):
     assert REQUIRED_DENIES <= denied
 
 
-def test_region_deny_covers_ec2_and_instance_connect(statements):
-    stmt = next(s for s in statements if s["Sid"] == "DenyOutsideAllowedRegions")
+def test_region_deny_covers_ec2_and_instance_connect(limits):
+    stmt = next(s for s in limits if s["Sid"] == "DenyOutsideAllowedRegions")
     # Since v1.4.0 this statement is the ONLY region limit, so it is pinned whole: a narrower
     # Resource, a NotAction or a second condition (conditions AND together) would open every
     # region.
@@ -371,7 +401,7 @@ def test_every_ec2_allow_is_region_or_tag_scoped(statements):
         if all(a.startswith(READ_ONLY) for a in _actions(s)):
             continue   # reads: the region deny is what limits them
         keys = _cond_keys(s)
-        assert keys & {RESOURCE_TAG, REQUEST_TAG, "ec2:Owner", "ec2:CreateAction"}, s["Sid"]
+        assert keys & {RESOURCE_TAG, REQUEST_TAG, ATTACHED_TAG, "ec2:Owner", "ec2:CreateAction"}, s["Sid"]
 
 
 def test_fence_tag_key_is_distinct_from_manage_tag(statements, manage):
@@ -402,21 +432,53 @@ def test_the_role_can_never_get_inside_a_box(statements):
     assert {"ec2-instance-connect:*", "ec2:GetConsole*"} <= unconditional
 
 
-def test_vpc_side_of_in_vpc_creates_requires_the_managed_tag(statements):
+def test_vpc_side_of_in_vpc_creates_requires_a_tag_on_the_vpc(statements):
     # This is the whole fence for "which VPC may Idlefy build in", and it does not depend on
     # the Resource ARN of the create statement: aws:RequestTag is in context only for the
     # resource being tagged, so a `Resource "*"` create statement never matches the vpc/* side.
     # Confirmed by DryRun against the deployed v1.0.1 role on 2026-09-16 — CreateSubnet into the
     # account's default VPC is denied on `.../vpc/<id>` with matchedStatements null. The test
-    # therefore asserts the property that matters (exactly one statement authorizes the VPC side,
-    # and it keys on the VPC's own tag) rather than the shape of the create statement.
+    # therefore asserts the property that matters (the statements that authorize the VPC side
+    # are exactly these two, and each keys on the VPC's own tag) rather than the shape of the
+    # create statement.
     vpc_allows = [
         s for s in statements
         if s["Effect"] == "Allow" and IN_VPC_CREATES & set(_actions(s)) and any(r.endswith(":vpc/*") for r in _resources(s))
     ]
-    assert [s["Sid"] for s in vpc_allows] == ["CreateInManagedVpc"]
+    assert [s["Sid"] for s in vpc_allows] == ["CreateInManagedVpc", "CreateGroupInAttachedVpc"]
     assert RESOURCE_TAG in _cond_keys(vpc_allows[0])
     assert REQUEST_TAG not in _cond_keys(vpc_allows[0])
+    # v1.5.0: in a VPC the customer attached, the one thing Idlefy may create is its own group.
+    assert _actions(vpc_allows[1]) == ["ec2:CreateSecurityGroup"]
+    assert vpc_allows[1]["Condition"] == {"StringEquals": {ATTACHED_TAG: ORG_ID}}
+
+
+def test_an_attached_network_is_never_changed_or_deleted(statements):
+    # IdlefyAttached is a weaker mark than IdlefyManaged on purpose: it lets Idlefy create its own
+    # group in the VPC and launch into a tagged subnet, and NOTHING else. A customer network must
+    # never be given IdlefyManaged (MutateManaged would let the role delete it).
+    keyed = {s["Sid"]: s for s in statements if ATTACHED_TAG in _cond_keys(s)}
+    assert set(keyed) == {"CreateGroupInAttachedVpc", "RunInAttachedSubnet"}
+    subnet = keyed["RunInAttachedSubnet"]
+    assert subnet["Effect"] == "Allow"
+    assert (_actions(subnet), subnet["Resource"]) == (["ec2:RunInstances"], "arn:aws:ec2:*:*:subnet/*")
+    assert subnet["Condition"] == {"StringEquals": {ATTACHED_TAG: ORG_ID}}
+    # The group of a launch must still be one Idlefy created, attached network or not.
+    group_allows = [
+        s["Sid"] for s in statements
+        if s["Effect"] == "Allow" and "ec2:RunInstances" in _actions(s)
+        and any("security-group/" in r for r in _resources(s))
+    ]
+    assert group_allows == ["RunInstancesManagedNetwork"]
+
+
+def test_actions_nothing_uses_are_not_granted(statements):
+    # v1.5.0 removed what was only "reserved": extra volumes, egress rules, the batch parameter read.
+    allowed = {a for s in statements if s["Effect"] == "Allow" for a in _actions(s)}
+    assert not allowed & {
+        "ec2:CreateVolume", "ec2:DeleteVolume", "ec2:AuthorizeSecurityGroupEgress",
+        "ec2:RevokeSecurityGroupEgress", "ssm:GetParameters",
+    }
 
 
 def test_ebs_encryption_defaults_are_readable(statements):

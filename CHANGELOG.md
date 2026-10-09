@@ -1,5 +1,32 @@
 # Changelog
 
+## v1.5.0
+
+- `idlefy-provision.yaml`: **hand an existing machine over to Idlefy.** Nothing new is needed
+  for the machine itself: you tag it with the marks of a box Idlefy created and the existing
+  statements apply. New for the network it lives in, which you tag `IdlefyAttached=<org id>`:
+  `CreateGroupInAttachedVpc` (Idlefy's own security group in a tagged VPC) and
+  `RunInAttachedSubnet` (launch into a tagged subnet, for a move to another zone). The tag
+  grants nothing else; a network that carries it cannot be changed or deleted by the role.
+- `idlefy-provision.yaml`: **switch a box to a security group Idlefy created.** New
+  `SwitchToManagedGroups` allows `ec2:ModifyInstanceAttribute` for the group list of an
+  instance tagged `IdlefyManaged=true`, and only to groups tagged `IdlefyManaged=true`: the
+  groups named in the call are resources of the call, so IAM itself refuses a list that names
+  a group of yours (verified against a live role). `DenyOtherInstanceAttributes` now denies a
+  call that carries neither the type nor the group list, and is scoped to `instance/*` (on
+  `*` it would also match the groups of a group change).
+- `idlefy-provision.yaml`: `DenyOutsideAllowedRegions` moved from the fence policy to the
+  role's inline policy `IdlefyProvisionLimits`, next to the instance-type denies, to keep the
+  fence policy under IAM's 6,144 characters. It is still the only region limit and still an
+  explicit deny on every EC2 call outside `AllowedRegions`. During the update of an existing
+  stack CloudFormation changes the fence policy first and the role's inline policy second, so
+  for the few seconds in between the region limit is not in force (the tag fence is).
+- `idlefy-provision.yaml`: removed actions nothing ever used: `ec2:CreateVolume`,
+  `ec2:DeleteVolume`, `ec2:AuthorizeSecurityGroupEgress`, `ec2:RevokeSecurityGroupEgress`,
+  `ssm:GetParameters`.
+- No new parameter. Updating an existing stack changes the policy document and the inline
+  policy in place.
+
 ## v1.4.1
 
 - `idlefy-provision.yaml`: **fixes the update from v1.3.0.** v1.4.0 reworded the

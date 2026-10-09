@@ -81,10 +81,10 @@ Resources:
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
-          # v1.4.0: no statement below repeats the region list. DenyOutsideAllowedRegions, at the
-          # end, denies every EC2 call outside AllowedRegions, and a deny beats any allow; a copy
-          # of the list on each allow only spent this policy's size budget (IAM caps a managed
-          # policy at 6,144 characters, and v1.3.0 went over it at 20 regions and 50 types).
+          # No statement below states a region. DenyOutsideAllowedRegions, in the role's inline
+          # policy IdlefyProvisionLimits (since v1.5.0; in this policy before), denies every EC2
+          # call outside AllowedRegions, and a deny beats any allow. IAM caps a managed policy at
+          # 6,144 characters, and v1.3.0 went over it at 20 regions and 50 types.
           - Sid: Describe
             Effect: Allow
             Action:
@@ -117,7 +117,6 @@ Resources:
             Effect: Allow
             Action:
               - ssm:GetParameter
-              - ssm:GetParameters   # reserved for S3/S4: resolving several AMIs in one call
             Resource:
               - arn:aws:ssm:*::parameter/aws/service/canonical/ubuntu/*
               - arn:aws:ssm:*::parameter/aws/service/debian/release/*
@@ -146,7 +145,6 @@ Resources:
               - ec2:CreateRouteTable
               - ec2:CreateSecurityGroup
               - ec2:AllocateAddress
-              - ec2:CreateVolume   # reserved for S3/S4: extra data volumes
               # v1.4.0, only with AllowZoneMove: the image and the snapshot behind it that
               # CreateImage makes when a dev box is moved to another zone. Both must be tagged
               # IdlefyManaged at creation.
@@ -166,6 +164,19 @@ Resources:
             Condition:
               StringEquals:
                 ec2:ResourceTag/IdlefyManaged: "true"
+
+          # v1.5.0: a network of YOURS that you attached to Idlefy by tagging the VPC
+          # IdlefyAttached=<your Idlefy organization id>. The tag lets Idlefy create its own
+          # per-box security group in that VPC (the group itself must be tagged IdlefyManaged at
+          # creation, by CreateTagged above) and nothing else: no statement lets the role change
+          # or delete a VPC, subnet, route or gateway that carries IdlefyAttached.
+          - Sid: CreateGroupInAttachedVpc
+            Effect: Allow
+            Action: ec2:CreateSecurityGroup
+            Resource: arn:aws:ec2:*:*:vpc/*
+            Condition:
+              StringEquals:
+                ec2:ResourceTag/IdlefyAttached: !Ref OrgId
 
           # v1.4.0: WHICH instance types may be launched is no longer stated here. It is a deny in
           # the role's own policy (IdlefyProvisionLimits, below), so the list is rendered outside
@@ -219,6 +230,24 @@ Resources:
               "Null":
                 ec2:Attribute/InstanceType: "false"
 
+          # v1.5.0: putting a box behind Idlefy's own security group. The security groups named
+          # in a ModifyInstanceAttribute call are resources of that call, so the tag condition
+          # holds for each of them: the role can set the group list of an instance that carries
+          # IdlefyManaged only to groups that carry IdlefyManaged too (groups Idlefy created). It
+          # can never attach a group of yours, and never touch an instance without the tag.
+          # Verified 2026-10-09: a list that names an untagged group is denied on that group.
+          - Sid: SwitchToManagedGroups
+            Effect: Allow
+            Action: ec2:ModifyInstanceAttribute
+            Resource:
+              - arn:aws:ec2:*:*:instance/*
+              - arn:aws:ec2:*:*:security-group/*
+            Condition:
+              StringEquals:
+                ec2:ResourceTag/IdlefyManaged: "true"
+              "Null":
+                ec2:Attribute/InstanceType: "true"
+
           - Sid: RunInstancesVolume
             Effect: Allow
             Action: ec2:RunInstances
@@ -238,6 +267,17 @@ Resources:
             Condition:
               StringEquals:
                 ec2:ResourceTag/IdlefyManaged: "true"
+
+          # v1.5.0: launching into a subnet of an attached network (see CreateGroupInAttachedVpc).
+          # The tag is read from the SUBNET, so you choose subnet by subnet where Idlefy may
+          # launch; the security group must still be one Idlefy created (statement above).
+          - Sid: RunInAttachedSubnet
+            Effect: Allow
+            Action: ec2:RunInstances
+            Resource: arn:aws:ec2:*:*:subnet/*
+            Condition:
+              StringEquals:
+                ec2:ResourceTag/IdlefyAttached: !Ref OrgId
 
           # The primary network interface is CREATED by RunInstances, so it has no
           # resource tag to match yet: fence it like the instance and the volume.
@@ -314,7 +354,6 @@ Resources:
                   - CreateRouteTable
                   - CreateSecurityGroup
                   - AllocateAddress
-                  - CreateVolume
                   - !If [ZoneMove, CreateImage, !Ref "AWS::NoValue"]
 
           - Sid: MutateManaged
@@ -348,13 +387,9 @@ Resources:
               - ec2:DeleteSecurityGroup
               - ec2:AuthorizeSecurityGroupIngress
               - ec2:RevokeSecurityGroupIngress
-              # reserved for S3/S4: egress policies per box (today the default allow-all stands)
-              - ec2:AuthorizeSecurityGroupEgress
-              - ec2:RevokeSecurityGroupEgress
               - ec2:AssociateAddress
               - ec2:DisassociateAddress
               - ec2:ReleaseAddress
-              - ec2:DeleteVolume   # reserved for S3/S4: detached data volumes
               # v1.4.0, only with AllowZoneMove: removing the temporary disk copy once the box
               # runs in its new zone.
               - !If [ZoneMove, "ec2:DeregisterImage", !Ref "AWS::NoValue"]
@@ -399,22 +434,27 @@ Resources:
             Resource: "*"
 
           # v1.4.0: replaces the outright deny of ec2:ModifyInstanceAttribute that v1.0.0-v1.3.0
-          # kept in DenyEscalation. Any call that does not carry InstanceType - user data,
-          # security groups, termination protection, source/dest check, every other attribute -
-          # is denied, and no later allow can undo it.
+          # kept in DenyEscalation. v1.5.0: any call that carries neither InstanceType nor the
+          # group list - user data, termination and stop protection, source/dest check, the
+          # disks' delete-on-termination, every other attribute - is denied, and no later allow
+          # can undo it. It is scoped to instances on purpose: the attribute keys exist only on
+          # the instance side of the call, so on "*" this statement would also match the security
+          # groups of a group change and deny it (verified 2026-10-09).
           - Sid: DenyOtherInstanceAttributes
             Effect: Deny
             Action: ec2:ModifyInstanceAttribute
-            Resource: "*"
+            Resource: arn:aws:ec2:*:*:instance/*
             Condition:
               "Null":
                 ec2:Attribute/InstanceType: "true"
+                ec2:Attribute/Groups: "true"
 
           # The statement above relies on EC2 accepting one attribute per call ("The request
           # must contain a single attribute", verified 2026-10-08). User data is code that runs
           # inside the box, so it does not rest on that rule alone: any call that carries it is
-          # denied by IAM itself, whatever else the call carries. (Security groups have no such
-          # condition key; for them the single-attribute rule is the barrier.)
+          # denied by IAM itself, whatever else the call carries. (A call that carried the group
+          # list or the type TOGETHER with another attribute would pass the statement above; for
+          # that the single-attribute rule is the barrier.)
           - Sid: DenyUserDataChange
             Effect: Deny
             Action: ec2:ModifyInstanceAttribute
@@ -422,16 +462,6 @@ Resources:
             Condition:
               "Null":
                 ec2:Attribute/UserData: "false"
-
-          - Sid: DenyOutsideAllowedRegions
-            Effect: Deny
-            Action:
-              - ec2:*
-              - ec2-instance-connect:*
-            Resource: "*"
-            Condition:
-              StringNotEquals:
-                aws:RequestedRegion: !Ref AllowedRegions
 
   ProvisionRole:
     Type: AWS::IAM::Role
@@ -472,6 +502,18 @@ Resources:
                     ec2:Attribute/InstanceType: !Ref AllowedInstanceTypes
                   "Null":
                     ec2:Attribute/InstanceType: "false"
+              # v1.5.0: the region limit moved here from the fence policy, for the same size
+              # reason as the type list. It is the ONLY region limit: no allow in the fence
+              # policy repeats the list.
+              - Sid: DenyOutsideAllowedRegions
+                Effect: Deny
+                Action:
+                  - ec2:*
+                  - ec2-instance-connect:*
+                Resource: "*"
+                Condition:
+                  StringNotEquals:
+                    aws:RequestedRegion: !Ref AllowedRegions
       AssumeRolePolicyDocument: !Sub |
         {
           "Version": "2012-10-17",
