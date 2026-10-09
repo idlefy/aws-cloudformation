@@ -86,7 +86,7 @@ def _limits(resources):
 
 @pytest.fixture(scope="session")
 def limits(provision):
-    """The role's inline policy: the instance-type lists, as explicit denies (v1.4.0)."""
+    """The role's inline policy: the instance-type lists (v1.4.0) and the region list (v1.5.0), as explicit denies."""
     return _limits(provision)
 
 
@@ -432,14 +432,15 @@ def test_the_role_can_never_get_inside_a_box(statements):
     assert {"ec2-instance-connect:*", "ec2:GetConsole*"} <= unconditional
 
 
-def test_vpc_side_of_in_vpc_creates_requires_the_managed_tag(statements):
+def test_vpc_side_of_in_vpc_creates_requires_a_tag_on_the_vpc(statements):
     # This is the whole fence for "which VPC may Idlefy build in", and it does not depend on
     # the Resource ARN of the create statement: aws:RequestTag is in context only for the
     # resource being tagged, so a `Resource "*"` create statement never matches the vpc/* side.
     # Confirmed by DryRun against the deployed v1.0.1 role on 2026-09-16 — CreateSubnet into the
     # account's default VPC is denied on `.../vpc/<id>` with matchedStatements null. The test
-    # therefore asserts the property that matters (exactly one statement authorizes the VPC side,
-    # and it keys on the VPC's own tag) rather than the shape of the create statement.
+    # therefore asserts the property that matters (the statements that authorize the VPC side
+    # are exactly these two, and each keys on the VPC's own tag) rather than the shape of the
+    # create statement.
     vpc_allows = [
         s for s in statements
         if s["Effect"] == "Allow" and IN_VPC_CREATES & set(_actions(s)) and any(r.endswith(":vpc/*") for r in _resources(s))

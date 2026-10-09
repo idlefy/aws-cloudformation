@@ -18,7 +18,9 @@
 - `idlefy-provision.yaml`: `DenyOutsideAllowedRegions` moved from the fence policy to the
   role's inline policy `IdlefyProvisionLimits`, next to the instance-type denies, to keep the
   fence policy under IAM's 6,144 characters. It is still the only region limit and still an
-  explicit deny on every EC2 call outside `AllowedRegions`.
+  explicit deny on every EC2 call outside `AllowedRegions`. During the update of an existing
+  stack CloudFormation changes the fence policy first and the role's inline policy second, so
+  for the few seconds in between the region limit is not in force (the tag fence is).
 - `idlefy-provision.yaml`: removed actions nothing ever used: `ec2:CreateVolume`,
   `ec2:DeleteVolume`, `ec2:AuthorizeSecurityGroupEgress`, `ec2:RevokeSecurityGroupEgress`,
   `ssm:GetParameters`.

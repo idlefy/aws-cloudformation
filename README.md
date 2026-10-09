@@ -18,17 +18,21 @@ The app always links to an exact version, never to `cfn/latest/`.
 
 ## The provision fence
 
-The provision role can only act on resources that carry the tag **`IdlefyManaged=true`**:
+The provision role can only change resources that carry the tag **`IdlefyManaged=true`**. The
+one other tag it reads is `IdlefyAttached`, which you may put on a network of your own (v1.5.0,
+see "Handing an existing machine over" below):
 
-- Creating a VPC, subnet, security group, route table, internet gateway, Elastic IP, volume
-  or instance is allowed only when the request tags it `IdlefyManaged=true`
+- Creating a VPC, subnet, security group, route table, internet gateway, Elastic IP or
+  instance (with its volume) is allowed only when the request tags it `IdlefyManaged=true`
   (`aws:RequestTag`), inside the regions you list (`AllowedRegions`), with an instance type
   from your list (`AllowedInstanceTypes`) and a volume no larger than `MaxVolumeGiB`.
 - A subnet, security group or route table can only be created inside a VPC that already
-  carries the tag; tagging the new resource alone is not enough.
+  carries the tag; tagging the new resource alone is not enough. A security group, and
+  nothing else, can also be created inside a VPC you tagged `IdlefyAttached=<org id>`.
 - Stopping, starting, terminating, deleting, associating or modifying is allowed only on
   resources that already carry the tag (`ec2:ResourceTag`).
-- Instances may only launch into a subnet and security group that carry the tag, from an
+- Instances may only launch into a subnet that carries the tag (or one you tagged
+  `IdlefyAttached=<org id>`) and with a security group that carries `IdlefyManaged`, from an
   image owned by Canonical or Amazon; the network interface created with the instance must
   be tagged at launch like the instance and its volume.
 - KMS is usable only through EC2 (`kms:ViaService = ec2.*.amazonaws.com`; grants only for AWS
@@ -114,8 +118,17 @@ the Idlefy app shows the exact command:
 
 From then on the machine **is** a dev box: Idlefy starts and stops it, changes its type,
 manages who may connect to it, and **deletes it, with its disk and its Elastic IP, when the
-box is deleted**. Remove `IdlefyManaged` from the instance to take it back; the role loses
-all reach at once.
+box is deleted**. With `AllowZoneMove = true` it can also be moved to another zone, which
+copies its disk as described above.
+
+To take a machine back, remove `IdlefyManaged` from the instance and from its Elastic IP, and
+switch the instance to security groups of your own. Removing the tag from the instance ends
+the role's reach over the instance at once, but not over the security group Idlefy created:
+while that group is attached, Idlefy still controls its inbound rules.
+
+`IdlefyManaged=true` is not tied to one Idlefy organization by IAM: if two organizations have
+a provision stack in the same AWS account, the role of either can act on a resource carrying
+the tag. Idlefy itself checks `IdlefyOrg` and `IdlefyResource` before every change.
 
 The disk goes with the machine only because AWS deletes it on termination: the role has no
 permission to delete a volume and cannot change a disk's delete-on-termination setting. The

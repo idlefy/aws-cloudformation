@@ -452,7 +452,9 @@ Resources:
           # The statement above relies on EC2 accepting one attribute per call ("The request
           # must contain a single attribute", verified 2026-10-08). User data is code that runs
           # inside the box, so it does not rest on that rule alone: any call that carries it is
-          # denied by IAM itself, whatever else the call carries.
+          # denied by IAM itself, whatever else the call carries. (A call that carried the group
+          # list or the type TOGETHER with another attribute would pass the statement above; for
+          # that the single-attribute rule is the barrier.)
           - Sid: DenyUserDataChange
             Effect: Deny
             Action: ec2:ModifyInstanceAttribute
