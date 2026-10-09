@@ -108,7 +108,7 @@ The role can never tag anything that already exists, so it can never reach a mac
 on its own. You hand one over by tagging it yourself with the marks of a box Idlefy created;
 the Idlefy app shows the exact command:
 
-- on the instance, its root volume and (if it has one) its Elastic IP: `IdlefyManaged=true`,
+- on the instance and (if it has one) its Elastic IP: `IdlefyManaged=true`,
   `IdlefyOrg=<your Idlefy organization id>`, `IdlefyResource=<the box id Idlefy shows>`;
 - on the VPC and on each subnet Idlefy may use: `IdlefyAttached=<your Idlefy organization id>`.
 
@@ -116,6 +116,11 @@ From then on the machine **is** a dev box: Idlefy starts and stops it, changes i
 manages who may connect to it, and **deletes it, with its disk and its Elastic IP, when the
 box is deleted**. Remove `IdlefyManaged` from the instance to take it back; the role loses
 all reach at once.
+
+The disk goes with the machine only because AWS deletes it on termination: the role has no
+permission to delete a volume and cannot change a disk's delete-on-termination setting. The
+Idlefy app therefore accepts a machine only when its root disk is set to be deleted on
+termination, and shows how to set it when it is not.
 
 The two tags are deliberately different:
 
@@ -128,8 +133,10 @@ The two tags are deliberately different:
   gateways of that network stay out of reach.
 
 Access to a machine you hand over is put behind a security group Idlefy creates, with the
-rules your own groups had. Your groups are never edited or deleted: the role can only switch
-the machine to groups that carry `IdlefyManaged=true`.
+inbound rules your own groups had. Outbound traffic is not carried over: the new group allows
+all of it, and the role has no permission to change outbound rules, so a machine whose groups
+restricted outbound traffic loses that restriction. Your groups are never edited or deleted:
+the role can only switch the machine to groups that carry `IdlefyManaged=true`.
 
 ## Compatibility contract with the Idlefy app
 
