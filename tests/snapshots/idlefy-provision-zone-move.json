@@ -31,8 +31,7 @@
       },
       {
         "Action": [
-          "ssm:GetParameter",
-          "ssm:GetParameters"
+          "ssm:GetParameter"
         ],
         "Effect": "Allow",
         "Resource": [
@@ -55,7 +54,6 @@
           "ec2:CreateRouteTable",
           "ec2:CreateSecurityGroup",
           "ec2:AllocateAddress",
-          "ec2:CreateVolume",
           "ec2:CreateImage"
         ],
         "Condition": {
@@ -81,6 +79,17 @@
         "Effect": "Allow",
         "Resource": "arn:aws:ec2:*:*:vpc/*",
         "Sid": "CreateInManagedVpc"
+      },
+      {
+        "Action": "ec2:CreateSecurityGroup",
+        "Condition": {
+          "StringEquals": {
+            "ec2:ResourceTag/IdlefyAttached": "9b546eb4-2394-48c0-adc7-7386ccd50422"
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "arn:aws:ec2:*:*:vpc/*",
+        "Sid": "CreateGroupInAttachedVpc"
       },
       {
         "Action": "ec2:RunInstances",
@@ -119,6 +128,23 @@
         "Sid": "ChangeInstanceType"
       },
       {
+        "Action": "ec2:ModifyInstanceAttribute",
+        "Condition": {
+          "Null": {
+            "ec2:Attribute/InstanceType": "true"
+          },
+          "StringEquals": {
+            "ec2:ResourceTag/IdlefyManaged": "true"
+          }
+        },
+        "Effect": "Allow",
+        "Resource": [
+          "arn:aws:ec2:*:*:instance/*",
+          "arn:aws:ec2:*:*:security-group/*"
+        ],
+        "Sid": "SwitchToManagedGroups"
+      },
+      {
         "Action": "ec2:RunInstances",
         "Condition": {
           "NumericLessThanEquals": {
@@ -145,6 +171,17 @@
           "arn:aws:ec2:*:*:security-group/*"
         ],
         "Sid": "RunInstancesManagedNetwork"
+      },
+      {
+        "Action": "ec2:RunInstances",
+        "Condition": {
+          "StringEquals": {
+            "ec2:ResourceTag/IdlefyAttached": "9b546eb4-2394-48c0-adc7-7386ccd50422"
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "arn:aws:ec2:*:*:subnet/*",
+        "Sid": "RunInAttachedSubnet"
       },
       {
         "Action": "ec2:RunInstances",
@@ -221,7 +258,6 @@
               "CreateRouteTable",
               "CreateSecurityGroup",
               "AllocateAddress",
-              "CreateVolume",
               "CreateImage"
             ]
           }
@@ -253,12 +289,9 @@
           "ec2:DeleteSecurityGroup",
           "ec2:AuthorizeSecurityGroupIngress",
           "ec2:RevokeSecurityGroupIngress",
-          "ec2:AuthorizeSecurityGroupEgress",
-          "ec2:RevokeSecurityGroupEgress",
           "ec2:AssociateAddress",
           "ec2:DisassociateAddress",
           "ec2:ReleaseAddress",
-          "ec2:DeleteVolume",
           "ec2:DeregisterImage",
           "ec2:DeleteSnapshot"
         ],
@@ -298,11 +331,12 @@
         "Action": "ec2:ModifyInstanceAttribute",
         "Condition": {
           "Null": {
+            "ec2:Attribute/Groups": "true",
             "ec2:Attribute/InstanceType": "true"
           }
         },
         "Effect": "Deny",
-        "Resource": "*",
+        "Resource": "arn:aws:ec2:*:*:instance/*",
         "Sid": "DenyOtherInstanceAttributes"
       },
       {
@@ -315,23 +349,6 @@
         "Effect": "Deny",
         "Resource": "*",
         "Sid": "DenyUserDataChange"
-      },
-      {
-        "Action": [
-          "ec2:*",
-          "ec2-instance-connect:*"
-        ],
-        "Condition": {
-          "StringNotEquals": {
-            "aws:RequestedRegion": [
-              "eu-central-1",
-              "us-east-1"
-            ]
-          }
-        },
-        "Effect": "Deny",
-        "Resource": "*",
-        "Sid": "DenyOutsideAllowedRegions"
       }
     ],
     "Version": "2012-10-17"
@@ -388,6 +405,23 @@
         "Effect": "Deny",
         "Resource": "*",
         "Sid": "DenyTypeChangeOutsideAllowedTypes"
+      },
+      {
+        "Action": [
+          "ec2:*",
+          "ec2-instance-connect:*"
+        ],
+        "Condition": {
+          "StringNotEquals": {
+            "aws:RequestedRegion": [
+              "eu-central-1",
+              "us-east-1"
+            ]
+          }
+        },
+        "Effect": "Deny",
+        "Resource": "*",
+        "Sid": "DenyOutsideAllowedRegions"
       }
     ],
     "Version": "2012-10-17"

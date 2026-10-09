@@ -49,11 +49,13 @@ The provision role can only act on resources that carry the tag **`IdlefyManaged
   `GetConsoleOutput`; v1.1.0 removes and then denies both.)
 - `ec2:CreateTags` works only as part of a create call; the role can never add or remove
   tags afterwards, so it cannot widen its own reach.
-- **Changing the machine type of a stopped box** (v1.4.0) is the only use of
-  `ModifyInstanceAttribute` the role has: the instance must carry the tag, the request must
-  change `InstanceType` and nothing else, and the new type must be in `AllowedInstanceTypes`.
-  Every other attribute (user data, security groups, termination protection, ...) is
-  explicitly denied, and a call that carries user data is denied whatever else it carries.
+- `ModifyInstanceAttribute` has exactly two uses, both on an instance that carries the tag.
+  **Changing the machine type of a stopped box** (v1.4.0): the new type must be in
+  `AllowedInstanceTypes`. **Putting a box behind a security group Idlefy created** (v1.5.0):
+  every group in the new list must carry `IdlefyManaged=true` itself, so the role can never
+  attach a group of yours. Every other attribute (user data, termination and stop protection,
+  source/dest check, the disks' delete-on-termination, ...) is explicitly denied, and a call
+  that carries user data is denied whatever else it carries.
 - **Moving a box to another zone** (v1.4.0) is off unless you set `AllowZoneMove` to `true`;
   see the section below. With or without it, the role can never share an image or a snapshot
   with another account (`ModifySnapshotAttribute` and `ModifyImageAttribute` are explicitly
@@ -63,13 +65,14 @@ The provision role can only act on resources that carry the tag **`IdlefyManaged
 - Explicit `Deny` on `iam:PassRole`, instance-profile association, `DeleteTags`, `sts:*`,
   `organizations:*`, and on any EC2 call outside `AllowedRegions`.
 - The fence policy is attached to the role **and** set as its permissions boundary, so a
-  policy attached later by mistake cannot exceed it. The instance-type list is the one limit
-  the boundary does not hold: it is the inline policy below, so do not delete that policy.
-- The instance-type list is enforced by two explicit denies in the role's own inline policy
-  `IdlefyProvisionLimits` (launching, and changing the type, outside `AllowedInstanceTypes`).
-  A deny holds whatever else is attached to the role. The list lives there because IAM caps
-  a managed policy at 6,144 characters; the region list is stated once, in the deny on calls
-  outside `AllowedRegions`. Both policies fit their limits at 20 regions and 50 types, and a
+  policy attached later by mistake cannot exceed it. The instance-type list and the region
+  list are the two limits the boundary does not hold: they are the inline policy below, so do
+  not delete that policy.
+- The instance-type list and (since v1.5.0) the region list are enforced by explicit denies in
+  the role's own inline policy `IdlefyProvisionLimits`: launching, or changing the type,
+  outside `AllowedInstanceTypes`, and any EC2 call outside `AllowedRegions`. A deny holds
+  whatever else is attached to the role. The lists live there because IAM caps a managed
+  policy at 6,144 characters. Both policies fit their limits at 20 regions and 50 types, and a
   test keeps it so.
 
 ### Moving a box to another zone (`AllowZoneMove`, off by default)
@@ -99,18 +102,34 @@ every box Idlefy created. People can still retry, and switch to another allowed 
 What the fence does not limit: the number of instances. That is bounded by Idlefy's own
 rate limits and by your EC2 service quotas.
 
-### Bring your own network
+### Handing an existing machine over to Idlefy (v1.5.0)
 
-Tagging one of your existing subnets and a security group with `IdlefyManaged=true` is
-consent for Idlefy to launch dev boxes there: the launch statements accept any subnet and
-security group carrying the tag, whoever created them. Untagged resources are untouchable,
-and the Idlefy app will not delete or modify a network it did not create even once you tag
-it. (Feature planned.)
+The role can never tag anything that already exists, so it can never reach a machine of yours
+on its own. You hand one over by tagging it yourself with the marks of a box Idlefy created;
+the Idlefy app shows the exact command:
 
-What is still missing for your own VPC is the per-box security group Idlefy creates for each
-box: a security group, subnet or route table can only be created inside a VPC that itself
-carries the tag — true since v1.0.0, unchanged here — so building in your VPC needs one more
-statement, a separate consent tag, planned for a later minor version.
+- on the instance, its root volume and (if it has one) its Elastic IP: `IdlefyManaged=true`,
+  `IdlefyOrg=<your Idlefy organization id>`, `IdlefyResource=<the box id Idlefy shows>`;
+- on the VPC and on each subnet Idlefy may use: `IdlefyAttached=<your Idlefy organization id>`.
+
+From then on the machine **is** a dev box: Idlefy starts and stops it, changes its type,
+manages who may connect to it, and **deletes it, with its disk and its Elastic IP, when the
+box is deleted**. Remove `IdlefyManaged` from the instance to take it back; the role loses
+all reach at once.
+
+The two tags are deliberately different:
+
+- `IdlefyManaged=true` means "Idlefy may change and delete this". Never put it on a VPC,
+  subnet, route table or gateway of yours.
+- `IdlefyAttached=<org id>` means "Idlefy may work inside this network" and grants exactly two
+  things: creating Idlefy's own per-box security group in a tagged VPC, and launching an
+  instance into a tagged subnet (used when a box is moved to another zone). No statement lets
+  the role change or delete a network that carries it, and the security groups, routes and
+  gateways of that network stay out of reach.
+
+Access to a machine you hand over is put behind a security group Idlefy creates, with the
+rules your own groups had. Your groups are never edited or deleted: the role can only switch
+the machine to groups that carry `IdlefyManaged=true`.
 
 ## Compatibility contract with the Idlefy app
 
