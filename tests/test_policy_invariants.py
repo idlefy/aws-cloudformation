@@ -64,6 +64,8 @@ READ_ONLY = (
 # new resource ARN, the VPC side must carry the fence tag (v1.1.0).
 IN_VPC_CREATES = {"ec2:CreateSubnet", "ec2:CreateSecurityGroup", "ec2:CreateRouteTable"}
 KMS_VIA_EC2 = "ec2.*.amazonaws.com"
+# v1.6.0: the one KMS statement that is not a use of a key through EC2.
+KEY_READ_SID = "DiskKeyRead"
 
 
 @pytest.fixture(scope="session", params=[False, True], ids=["default", "zone-move"])
@@ -120,6 +122,8 @@ def test_mutating_actions_require_the_resource_tag(statements):
             if action.startswith(READ_ONLY) or action in CREATE_ACTIONS or action == "ec2:CreateTags":
                 continue
             if action.startswith("kms:"):
+                if s["Sid"] == KEY_READ_SID:   # a read of the key's description, not a use of it
+                    continue
                 assert "kms:ViaService" in _cond_keys(s), f"{s['Sid']}: {action} lacks kms:ViaService"
                 continue
             assert RESOURCE_TAG in _cond_keys(s), f"{s['Sid']}: {action} lacks {RESOURCE_TAG}"
@@ -486,6 +490,25 @@ def test_ebs_encryption_defaults_are_readable(statements):
     assert set(_actions(stmt)) == {"ec2:GetEbsEncryptionByDefault", "ec2:GetEbsDefaultKmsKeyId"}
 
 
+def test_a_disk_key_can_be_described_and_nothing_more(statements):
+    # v1.6.0. core-api asks whose key a disk is on before it takes a machine or creates a box
+    # (a box on a customer-managed key cannot be started by the manage role). Outside EC2, the
+    # role may read a key's description and do nothing else with it, and only for a key of this
+    # account.
+    stmt = next(s for s in statements if s["Sid"] == KEY_READ_SID)
+    assert _actions(stmt) == ["kms:DescribeKey"]
+    assert _resources(stmt) == [f"arn:aws:kms:*:{ACCOUNT_ID}:key/*"]
+    assert "Condition" not in stmt
+    direct = [
+        action
+        for s in statements
+        if s["Effect"] == "Allow" and "kms:ViaService" not in _cond_keys(s)
+        for action in _actions(s)
+        if action.startswith("kms:")
+    ]
+    assert direct == ["kms:DescribeKey"]
+
+
 def test_no_statement_allows_run_instances_on_a_key_pair(statements):
     # The provider never sends KeyName (cloud-init installs the keys), so the role has no
     # business naming a key pair at all. v1.0.0/v1.0.1 carried a RunInstancesKeyPair statement.
@@ -496,7 +519,8 @@ def test_kms_is_usable_only_through_ec2(statements):
     # core-api refuses to launch below template v1.1.0 precisely because these two Sids are what
     # v1.1.0 adds (ProvisioningFenceError("template_version")); their existence is the contract.
     kms = [s for s in statements if s["Effect"] == "Allow" and any(a.startswith("kms:") for a in _actions(s))]
-    assert {s["Sid"] for s in kms} == {"EbsEncryptionKms", "EbsEncryptionKmsGrant"}
+    assert {s["Sid"] for s in kms} == {"EbsEncryptionKms", "EbsEncryptionKmsGrant", KEY_READ_SID}
+    kms = [s for s in kms if s["Sid"] != KEY_READ_SID]
     for s in kms:
         assert s["Condition"]["StringLike"]["kms:ViaService"] == KMS_VIA_EC2, s["Sid"]
         # The account-scoped Resource is what keeps this to the account's OWN keys. A
