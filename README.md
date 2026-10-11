@@ -39,8 +39,11 @@ see "Handing an existing machine over" below):
   resources) and only on keys in your own account (the statements are scoped to
   `arn:aws:kms:*:<your-account>:key/*`), which encrypted root volumes need. A key shared into
   your account from somewhere else is out of reach even if its key policy would allow it.
-  If your account's default EBS key is a customer-managed key, its key policy must allow the
-  account (the default key policy does).
+  Outside EC2 the role can do one thing with a key of your account: read its description
+  (`kms:DescribeKey`, v1.6.0), to tell a key AWS manages from one you manage yourself. Idlefy
+  does not create a box, or take a machine of yours, whose disk would be on a key you manage:
+  the manage role, which starts and stops boxes, has no KMS access, so such a box could not be
+  started again. The app says so before anything is created.
   The role can also read the account's EBS encryption defaults and the AWS default value of an
   EC2 quota your account has never changed.
 - The role can never name an EC2 key pair: Idlefy installs your SSH keys through cloud-init, so

@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.6.0
+
+- `idlefy-provision.yaml`: **read whose key a disk is on.** New `DiskKeyRead` allows
+  `kms:DescribeKey` on the keys of your own account, with no other KMS action and no way to
+  use a key. A box whose disk is encrypted with a key you manage yourself cannot be started by
+  the manage role (it has no KMS access), so the app now checks the key first and refuses,
+  with the reason, to take such a machine or to create a box in a region whose default EBS key
+  is one of yours. Every other KMS statement is unchanged and still works only through EC2.
+- The app needs v1.6.0 to add an existing machine. Creating boxes keeps working on older
+  stacks.
+- No new parameter. Updating an existing stack changes the policy document in place.
+
 ## v1.5.0
 
 - `idlefy-provision.yaml`: **hand an existing machine over to Idlefy.** Nothing new is needed

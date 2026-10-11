@@ -111,6 +111,15 @@ Resources:
               - ec2:GetEbsDefaultKmsKeyId
             Resource: "*"
 
+          # v1.6.0: whose key a disk is encrypted with. Idlefy asks before it takes a machine
+          # of yours or creates a box: a box on a key you manage yourself could not be started
+          # again (the manage role has no KMS access). This reads the key's description only;
+          # it cannot use the key, and it does not reach a key of another account.
+          - Sid: DiskKeyRead
+            Effect: Allow
+            Action: kms:DescribeKey
+            Resource: !Sub arn:aws:kms:*:${AWS::AccountId}:key/*
+
           # The public parameters the image publishers keep pointed at their latest AMI:
           # Canonical (Ubuntu) and, since v1.3.0, Debian. Public parameters have no account id.
           - Sid: ImageLookup
