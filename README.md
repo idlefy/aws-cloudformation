@@ -20,7 +20,7 @@ The app always links to an exact version, never to `cfn/latest/`.
 
 The provision role can only change resources that carry the tag **`IdlefyManaged=true`**. The
 one other tag it reads is `IdlefyAttached`, which you may put on a network of your own (v1.5.0,
-see "Handing an existing machine over" below):
+see "Handing an existing machine over" below) or on an image of your own (v1.7.0):
 
 - Creating a VPC, subnet, security group, route table, internet gateway, Elastic IP or
   instance (with its volume) is allowed only when the request tags it `IdlefyManaged=true`
@@ -33,8 +33,21 @@ see "Handing an existing machine over" below):
   resources that already carry the tag (`ec2:ResourceTag`).
 - Instances may only launch into a subnet that carries the tag (or one you tagged
   `IdlefyAttached=<org id>`) and with a security group that carries `IdlefyManaged`, from an
-  image owned by Canonical or Amazon; the network interface created with the instance must
-  be tagged at launch like the instance and its volume.
+  image owned by Canonical, Amazon or Debian; the network interface created with the instance
+  must be tagged at launch like the instance and its volume.
+- **An image of your own account is launched only after you attach it** (v1.7.0): put the tag
+  `IdlefyAttached=<org id>` on the image. A launch runs a startup script the caller chooses,
+  so whoever may launch an image may read what is on it; without the tag the role cannot
+  launch any image you own, a backup or a golden image included. The role cannot write the tag
+  itself. Images shared in from another account and Marketplace images are never launchable.
+- **Reads are named one by one** (v1.7.0): instances, images, volumes, snapshots, networks,
+  addresses, instance types and availability zones. The role cannot read launch templates or
+  VPN connections, and it cannot read any attribute of any instance
+  (`ec2:DescribeInstanceAttribute` is explicitly denied): that call returns user data, and IAM
+  cannot allow the other attributes without it.
+- **Disks are gp3, at most 16,000 IOPS** (v1.7.0), and no larger than `MaxVolumeGiB`. The
+  number of machines is not something IAM can limit: your EC2 service quotas and the list of
+  instance types are what cap it.
 - KMS is usable only through EC2 (`kms:ViaService = ec2.*.amazonaws.com`; grants only for AWS
   resources) and only on keys in your own account (the statements are scoped to
   `arn:aws:kms:*:<your-account>:key/*`), which encrypted root volumes need. A key shared into
@@ -50,9 +63,10 @@ see "Handing an existing machine over" below):
   no key pair is ever attached to a box.
 - **Idlefy can never get inside a box, or read what is inside it.** It starts, stops,
   terminates and networks your boxes from the outside; it has no way to open a shell, run a
-  command, push an SSH key onto a running instance, or read the guest's own console output or
-  screen. `ec2-instance-connect:*` and `ec2:GetConsole*` are explicitly denied, so no later
-  policy change can grant them either. (v1.0.0 and v1.0.1 allowed `SendSSHPublicKey` and
+  command, push an SSH key onto a running instance, or read the guest's own console output,
+  screen or user data. `ec2-instance-connect:*`, `ec2:GetConsole*` and (v1.7.0)
+  `ec2:DescribeInstanceAttribute` are explicitly denied, so no later policy change can grant
+  them either. (v1.0.0 and v1.0.1 allowed `SendSSHPublicKey` and
   `GetConsoleOutput`; v1.1.0 removes and then denies both.)
 - `ec2:CreateTags` works only as part of a create call; the role can never add or remove
   tags afterwards, so it cannot widen its own reach.

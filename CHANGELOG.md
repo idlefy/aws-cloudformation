@@ -1,5 +1,34 @@
 # Changelog
 
+## v1.7.0
+
+Narrower reach, after an outside review of v1.6.0. No new parameter; updating an existing
+stack changes the two policy documents in place.
+
+- `idlefy-provision.yaml`: **an image of your own account is launched only after you attach
+  it.** New `DenyOwnImageNotAttached` on the role: a launch from an image the account owns is
+  denied unless the image carries `IdlefyAttached=<your Idlefy organization id>`. Up to v1.6.0
+  every image of the account was launchable, and since a launch runs a startup script the
+  caller chooses, that meant every image was readable - a backup or a golden image included.
+  With `AllowZoneMove` on, the temporary disk copy Idlefy makes of a box stays launchable.
+  **If you use an image of your own for dev boxes, tag it before updating the stack**:
+  `aws ec2 create-tags --resources <ami-id> --tags Key=IdlefyAttached,Value=<org id>`.
+- **Reads are named one by one.** `ec2:Describe*` is replaced by the fourteen reads Idlefy
+  makes. Launch templates (their user data) and VPN connections (their pre-shared keys) are no
+  longer readable.
+- **No instance attribute is readable.** `ec2:DescribeInstanceAttribute` returns user data,
+  and IAM cannot allow the other attributes without it, so the action is now explicitly
+  denied. Idlefy used it for one thing: asking whether a machine you hand over has termination
+  or stop protection. The app now gives you the two commands that switch them off as part of
+  the hand-over instead.
+- **Disks are gp3, at most 16,000 IOPS.** New `DenyOtherVolumeTypes` and `DenyHighIops` on the
+  role. Idlefy never asked for anything else; now it cannot.
+- `DenyEscalation` moved from the fence policy to the role's inline policy
+  (`IdlefyProvisionLimits`), unchanged apart from the new entry. The fence policy is capped at
+  6,144 characters and now names every read; none of the denied actions is allowed by it, and
+  an explicit deny on the role holds whatever is attached to the role later.
+- The app works with v1.6.0 and v1.7.0 stacks alike.
+
 ## v1.6.0
 
 - `idlefy-provision.yaml`: **read whose key a disk is on.** New `DiskKeyRead` allows
