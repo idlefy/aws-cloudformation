@@ -3,7 +3,20 @@
     "Statement": [
       {
         "Action": [
-          "ec2:Describe*"
+          "ec2:DescribeAddresses",
+          "ec2:DescribeAvailabilityZones",
+          "ec2:DescribeImages",
+          "ec2:DescribeInstanceTypeOfferings",
+          "ec2:DescribeInstanceTypes",
+          "ec2:DescribeInstances",
+          "ec2:DescribeInternetGateways",
+          "ec2:DescribeNetworkInterfaces",
+          "ec2:DescribeRouteTables",
+          "ec2:DescribeSecurityGroups",
+          "ec2:DescribeSnapshots",
+          "ec2:DescribeSubnets",
+          "ec2:DescribeVolumes",
+          "ec2:DescribeVpcs"
         ],
         "Effect": "Allow",
         "Resource": "*",
@@ -311,29 +324,6 @@
         "Sid": "MutateManaged"
       },
       {
-        "Action": [
-          "ec2-instance-connect:*",
-          "ec2:GetConsole*",
-          "iam:PassRole",
-          "ec2:AssociateIamInstanceProfile",
-          "ec2:ReplaceIamInstanceProfileAssociation",
-          "ec2:DeleteTags",
-          "ec2:ModifySnapshotAttribute",
-          "ec2:ModifyImageAttribute",
-          "ebs:*",
-          "ec2:CopySnapshot",
-          "ec2:CopyImage",
-          "ec2:CreateStoreImageTask",
-          "ec2:ExportImage",
-          "ec2:CreateInstanceExportTask",
-          "sts:*",
-          "organizations:*"
-        ],
-        "Effect": "Deny",
-        "Resource": "*",
-        "Sid": "DenyEscalation"
-      },
-      {
         "Action": "ec2:ModifyInstanceAttribute",
         "Condition": {
           "Null": {
@@ -428,6 +418,67 @@
         "Effect": "Deny",
         "Resource": "*",
         "Sid": "DenyOutsideAllowedRegions"
+      },
+      {
+        "Action": [
+          "ec2-instance-connect:*",
+          "ec2:GetConsole*",
+          "ec2:DescribeInstanceAttribute",
+          "iam:PassRole",
+          "ec2:AssociateIamInstanceProfile",
+          "ec2:ReplaceIamInstanceProfileAssociation",
+          "ec2:DeleteTags",
+          "ec2:ModifySnapshotAttribute",
+          "ec2:ModifyImageAttribute",
+          "ebs:*",
+          "ec2:CopySnapshot",
+          "ec2:CopyImage",
+          "ec2:CreateStoreImageTask",
+          "ec2:ExportImage",
+          "ec2:CreateInstanceExportTask",
+          "sts:*",
+          "organizations:*"
+        ],
+        "Effect": "Deny",
+        "Resource": "*",
+        "Sid": "DenyEscalation"
+      },
+      {
+        "Action": "ec2:RunInstances",
+        "Condition": {
+          "StringEquals": {
+            "ec2:Owner": "123456789012"
+          },
+          "StringNotEquals": {
+            "ec2:ResourceTag/IdlefyAttached": "9b546eb4-2394-48c0-adc7-7386ccd50422",
+            "ec2:ResourceTag/IdlefyManaged": "true"
+          }
+        },
+        "Effect": "Deny",
+        "Resource": "arn:aws:ec2:*::image/*",
+        "Sid": "DenyOwnImageNotAttached"
+      },
+      {
+        "Action": "ec2:RunInstances",
+        "Condition": {
+          "StringNotEquals": {
+            "ec2:VolumeType": "gp3"
+          }
+        },
+        "Effect": "Deny",
+        "Resource": "arn:aws:ec2:*:*:volume/*",
+        "Sid": "DenyOtherVolumeTypes"
+      },
+      {
+        "Action": "ec2:RunInstances",
+        "Condition": {
+          "NumericGreaterThan": {
+            "ec2:VolumeIops": "16000"
+          }
+        },
+        "Effect": "Deny",
+        "Resource": "arn:aws:ec2:*:*:volume/*",
+        "Sid": "DenyHighIops"
       }
     ],
     "Version": "2012-10-17"

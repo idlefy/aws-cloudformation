@@ -40,11 +40,13 @@ FORBIDDEN_ALLOWS = {
     "ec2-instance-connect:*",
     # Same rule, read side: the console output and screenshot are the guest's own output.
     "ec2:GetConsole*",
+    # v1.7.0: so is the user data, and IAM cannot allow the other attributes without it.
+    "ec2:DescribeInstanceAttribute",
 }
 REQUIRED_DENIES = {
     "iam:PassRole", "ec2:AssociateIamInstanceProfile", "ec2:ReplaceIamInstanceProfileAssociation",
     "ec2:DeleteTags", "sts:*", "organizations:*",
-    "ec2-instance-connect:*", "ec2:GetConsole*",
+    "ec2-instance-connect:*", "ec2:GetConsole*", "ec2:DescribeInstanceAttribute",
     "ec2:ModifySnapshotAttribute", "ec2:ModifyImageAttribute", "ebs:*",
     "ec2:CopySnapshot", "ec2:CopyImage",
     "ec2:CreateStoreImageTask", "ec2:ExportImage", "ec2:CreateInstanceExportTask",
@@ -52,7 +54,16 @@ REQUIRED_DENIES = {
 INSTANCE_TYPE_ATTRIBUTE = "ec2:Attribute/InstanceType"
 # Granted only when the customer turns AllowZoneMove on (off by default).
 ZONE_MOVE_ACTIONS = {"ec2:CreateImage", "ec2:DeregisterImage", "ec2:DeleteSnapshot"}
-ALLOWED_WILDCARDS = {"ec2:Describe*", "kms:ReEncrypt*"}
+ALLOWED_WILDCARDS = {"kms:ReEncrypt*"}
+# v1.7.0: the EC2 reads, by name. Exactly what core-api calls under the provision role; a new
+# read is added here and to the template together, never as a wildcard.
+DESCRIBE_ACTIONS = {
+    "ec2:DescribeAddresses", "ec2:DescribeAvailabilityZones", "ec2:DescribeImages",
+    "ec2:DescribeInstanceTypeOfferings", "ec2:DescribeInstanceTypes", "ec2:DescribeInstances",
+    "ec2:DescribeInternetGateways", "ec2:DescribeNetworkInterfaces", "ec2:DescribeRouteTables",
+    "ec2:DescribeSecurityGroups", "ec2:DescribeSnapshots", "ec2:DescribeSubnets",
+    "ec2:DescribeVolumes", "ec2:DescribeVpcs",
+}
 IAM_MANAGED_POLICY_LIMIT = 6144   # non-whitespace characters
 IAM_ROLE_INLINE_LIMIT = 10240     # non-whitespace characters, all inline policies of a role
 # Read-only prefixes that legitimately have no tag condition.
@@ -90,6 +101,12 @@ def _limits(resources):
 def limits(provision):
     """The role's inline policy: the instance-type lists (v1.4.0) and the region list (v1.5.0), as explicit denies."""
     return _limits(provision)
+
+
+@pytest.fixture(scope="session")
+def role_denies(zone_move, provision, provision_zone_move):
+    """The role's inline policy in the rendering `statements` is taken from."""
+    return _limits(provision_zone_move if zone_move else provision)
 
 
 def _actions(stmt):
@@ -179,6 +196,7 @@ def test_instance_types_are_limited_by_explicit_denies_on_the_role(limits):
     }
     assert {s["Sid"] for s in limits} == {
         "DenyLaunchOutsideAllowedTypes", "DenyTypeChangeOutsideAllowedTypes", "DenyOutsideAllowedRegions",
+        "DenyEscalation", "DenyOwnImageNotAttached", "DenyOtherVolumeTypes", "DenyHighIops",
     }
 
 
@@ -314,6 +332,44 @@ def test_run_instances_new_network_interface_requires_request_tag(statements):
     assert eni_allows == [stmt]
 
 
+def test_reads_are_named_one_by_one(statements):
+    # v1.7.0: ec2:Describe* also read launch-template user data, VPN pre-shared keys and the
+    # user data of every instance in the account.
+    stmt = next(s for s in statements if s["Sid"] == "Describe")
+    assert set(_actions(stmt)) == DESCRIBE_ACTIONS
+    described = {
+        a for s in statements if s["Effect"] == "Allow" for a in _actions(s) if a.startswith("ec2:Describe")
+    }
+    assert described == DESCRIBE_ACTIONS
+
+
+def test_an_image_of_the_account_is_launched_only_when_attached(role_denies, zone_move):
+    # v1.7.0. The allow (RunInstancesImage) still names the account as an owner; this deny is
+    # what narrows it, so it is pinned whole. The conditions AND together: own image, not
+    # attached to this organization, and (zone move only) not a disk copy Idlefy made.
+    stmt = next(s for s in role_denies if s["Sid"] == "DenyOwnImageNotAttached")
+    assert stmt["Effect"] == "Deny"
+    assert _actions(stmt) == ["ec2:RunInstances"]
+    assert stmt["Resource"] == "arn:aws:ec2:*::image/*"
+    assert "NotAction" not in stmt and "NotResource" not in stmt
+    unless = {ATTACHED_TAG: ORG_ID}
+    if zone_move:
+        unless[RESOURCE_TAG] = "true"
+    assert stmt["Condition"] == {"StringEquals": {"ec2:Owner": ACCOUNT_ID}, "StringNotEquals": unless}
+
+
+def test_disks_are_gp3_and_not_above_16000_iops(role_denies):
+    # v1.7.0. Two statements, not one: conditions in one statement AND together, and either
+    # fact alone must deny the launch.
+    volume = "arn:aws:ec2:*:*:volume/*"
+    kind = next(s for s in role_denies if s["Sid"] == "DenyOtherVolumeTypes")
+    assert (kind["Effect"], _actions(kind), kind["Resource"]) == ("Deny", ["ec2:RunInstances"], volume)
+    assert kind["Condition"] == {"StringNotEquals": {"ec2:VolumeType": "gp3"}}
+    iops = next(s for s in role_denies if s["Sid"] == "DenyHighIops")
+    assert (iops["Effect"], _actions(iops), iops["Resource"]) == ("Deny", ["ec2:RunInstances"], volume)
+    assert iops["Condition"] == {"NumericGreaterThan": {"ec2:VolumeIops": "16000"}}
+
+
 def test_images_limited_to_known_publishers_and_this_account(statements):
     # Canonical, Amazon, Debian, and the account's own images (v1.3.0). Nothing shared in from
     # another account and no Marketplace: the list is exact, not a superset.
@@ -373,11 +429,13 @@ def test_forbidden_actions_are_never_allowed(statements):
                 assert action in ALLOWED_WILDCARDS, f"{s['Sid']} allows wildcard {action}"
 
 
-def test_required_denies_present(statements):
+def test_required_denies_present(role_denies):
     # Unconditional and on every resource: a condition or a narrower Resource would void it.
+    # v1.7.0: they live on the role (the fence policy ran out of room); none of these actions
+    # is allowed by the fence policy, which test_forbidden_actions_are_never_allowed holds.
     denied = {
         a
-        for s in statements
+        for s in role_denies
         if s["Effect"] == "Deny" and "Condition" not in s and s["Resource"] == "*" and "NotAction" not in s
         for a in _actions(s)
     }
@@ -419,21 +477,21 @@ def test_fence_tag_key_is_distinct_from_manage_tag(statements, manage):
     assert RESOURCE_TAG not in manage_keys
 
 
-def test_the_role_can_never_get_inside_a_box(statements):
+def test_the_role_can_never_get_inside_a_box(statements, role_denies):
     # Product rule, not a preference: Idlefy operates boxes from the outside — start, stop,
     # terminate, network — and never has access inside the guest. EC2 Instance Connect pushes a
     # caller-chosen SSH key onto a running instance, so it is denied unconditionally rather than
     # simply left out: an Allow added later, here or in another policy on this role, cannot
     # override a Deny. v1.0.0 and v1.0.1 granted SendSSHPublicKey; nothing ever used it.
-    inside = ("ec2-instance-connect:", "ec2:GetConsole")
+    inside = ("ec2-instance-connect:", "ec2:GetConsole", "ec2:DescribeInstanceAttribute")
     assert not [
         s for s in statements
         if s["Effect"] == "Allow" and any(a.startswith(inside) for a in _actions(s))
     ]
     unconditional = {
-        a for s in statements if s["Effect"] == "Deny" and "Condition" not in s for a in _actions(s)
+        a for s in role_denies if s["Effect"] == "Deny" and "Condition" not in s for a in _actions(s)
     }
-    assert {"ec2-instance-connect:*", "ec2:GetConsole*"} <= unconditional
+    assert {"ec2-instance-connect:*", "ec2:GetConsole*", "ec2:DescribeInstanceAttribute"} <= unconditional
 
 
 def test_vpc_side_of_in_vpc_creates_requires_a_tag_on_the_vpc(statements):

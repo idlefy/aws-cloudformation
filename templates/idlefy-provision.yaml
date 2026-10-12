@@ -3,7 +3,8 @@ Description: >-
   Idlefy provision role (template __TEMPLATE_VERSION__). Opt-in: lets Idlefy create dev boxes
   for your organization. Every resource Idlefy creates must carry the tag IdlefyManaged=true,
   and Idlefy can only change or delete resources that carry it. Regions, instance types and
-  volume size are limited to the values you set below. Delete this stack to revoke provisioning;
+  volume size are limited to the values you set below. An image of your own is used only after
+  you tag it IdlefyAttached=<your organization id>. Delete this stack to revoke provisioning;
   the manage role keeps working.
 
 Metadata:
@@ -85,10 +86,28 @@ Resources:
           # policy IdlefyProvisionLimits (since v1.5.0; in this policy before), denies every EC2
           # call outside AllowedRegions, and a deny beats any allow. IAM caps a managed policy at
           # 6,144 characters, and v1.3.0 went over it at 20 regions and 50 types.
+          # v1.7.0: the reads Idlefy makes, by name. Up to v1.6.0 this was ec2:Describe*, which
+          # also read things Idlefy has no use for and you may keep secrets in: the user data of
+          # launch templates, VPN connection configurations with their pre-shared keys. An action
+          # that is not in this list is not allowed. DescribeInstanceAttribute is not in it, and
+          # is denied outright on the role: it returns the user data of a machine.
           - Sid: Describe
             Effect: Allow
             Action:
-              - ec2:Describe*
+              - ec2:DescribeAddresses
+              - ec2:DescribeAvailabilityZones
+              - ec2:DescribeImages
+              - ec2:DescribeInstanceTypeOfferings
+              - ec2:DescribeInstanceTypes
+              - ec2:DescribeInstances
+              - ec2:DescribeInternetGateways
+              - ec2:DescribeNetworkInterfaces
+              - ec2:DescribeRouteTables
+              - ec2:DescribeSecurityGroups
+              - ec2:DescribeSnapshots
+              - ec2:DescribeSubnets
+              - ec2:DescribeVolumes
+              - ec2:DescribeVpcs
             Resource: "*"
 
           - Sid: DescribeGlobal
@@ -306,6 +325,9 @@ Resources:
               # Whose images may be launched: Canonical (Ubuntu), Amazon, Debian (v1.3.0) and
               # this account's own images (v1.3.0, "custom images"). Never an image shared in
               # from another account, and never a Marketplace image.
+              # v1.7.0: an image of this account only when you attached it (the tag
+              # IdlefyAttached=<your Idlefy organization id> on the image) - see
+              # DenyOwnImageNotAttached on the role.
               StringEquals:
                 ec2:Owner:
                   - "099720109477"
@@ -408,40 +430,6 @@ Resources:
               StringEquals:
                 ec2:ResourceTag/IdlefyManaged: "true"
 
-          - Sid: DenyEscalation
-            Effect: Deny
-            Action:
-              # Idlefy must never be able to get inside a box it manages, or to read what is
-              # inside it. SendSSHPublicKey pushes a caller-chosen SSH key onto a running
-              # instance; GetConsoleOutput and GetConsoleScreenshot return the guest's own
-              # output — the boot log, kernel messages, whatever cloud-init printed, the
-              # screen. All are denied outright rather than merely left ungranted: a Deny
-              # cannot be undone by a later Allow, here or in any policy attached to this
-              # role. v1.0.0 and v1.0.1 granted the first two; nothing ever used them.
-              - ec2-instance-connect:*
-              - ec2:GetConsole*
-              - iam:PassRole
-              - ec2:AssociateIamInstanceProfile
-              - ec2:ReplaceIamInstanceProfileAssociation
-              - ec2:DeleteTags
-              # v1.4.0: an image or a snapshot is never shared with another account and never
-              # read block by block, whether or not AllowZoneMove is on. The first two change
-              # who may use a snapshot or an image; ebs:* is direct access to a snapshot's blocks.
-              - ec2:ModifySnapshotAttribute
-              - ec2:ModifyImageAttribute
-              - ebs:*
-              # Nor copied or exported: the last three write a disk to an S3 bucket named in the
-              # request, which can belong to another account. None is granted; they are denied
-              # so that no later edit can grant them.
-              - ec2:CopySnapshot
-              - ec2:CopyImage
-              - ec2:CreateStoreImageTask
-              - ec2:ExportImage
-              - ec2:CreateInstanceExportTask
-              - sts:*
-              - organizations:*
-            Resource: "*"
-
           # v1.4.0: replaces the outright deny of ec2:ModifyInstanceAttribute that v1.0.0-v1.3.0
           # kept in DenyEscalation. v1.5.0: any call that carries neither InstanceType nor the
           # group list - user data, termination and stop protection, source/dest check, the
@@ -523,6 +511,85 @@ Resources:
                 Condition:
                   StringNotEquals:
                     aws:RequestedRegion: !Ref AllowedRegions
+              # v1.7.0: moved here from the fence policy, which is capped at 6,144 characters and
+              # now names every read. Nothing in the fence policy allows any of these actions, and
+              # an explicit deny on the role holds whatever is attached to it later.
+              - Sid: DenyEscalation
+                Effect: Deny
+                Action:
+                  # Idlefy must never be able to get inside a box it manages, or to read what is
+                  # inside it. SendSSHPublicKey pushes a caller-chosen SSH key onto a running
+                  # instance; GetConsoleOutput and GetConsoleScreenshot return the guest's own
+                  # output — the boot log, kernel messages, whatever cloud-init printed, the
+                  # screen. All are denied outright rather than merely left ungranted: a Deny
+                  # cannot be undone by a later Allow, here or in any policy attached to this
+                  # role. v1.0.0 and v1.0.1 granted the first two; nothing ever used them.
+                  - ec2-instance-connect:*
+                  - ec2:GetConsole*
+                  # v1.7.0: the attributes of an instance include its user data - the startup
+                  # script, which often carries secrets. IAM cannot tell one attribute from
+                  # another on a read (ec2:Attribute is not set for it, verified 2026-10-12), so
+                  # the whole action is denied: Idlefy reads no attribute of any machine.
+                  - ec2:DescribeInstanceAttribute
+                  - iam:PassRole
+                  - ec2:AssociateIamInstanceProfile
+                  - ec2:ReplaceIamInstanceProfileAssociation
+                  - ec2:DeleteTags
+                  # v1.4.0: an image or a snapshot is never shared with another account and never
+                  # read block by block, whether or not AllowZoneMove is on. The first two change
+                  # who may use a snapshot or an image; ebs:* is direct access to a snapshot's blocks.
+                  - ec2:ModifySnapshotAttribute
+                  - ec2:ModifyImageAttribute
+                  - ebs:*
+                  # Nor copied or exported: the last three write a disk to an S3 bucket named in the
+                  # request, which can belong to another account. None is granted; they are denied
+                  # so that no later edit can grant them.
+                  - ec2:CopySnapshot
+                  - ec2:CopyImage
+                  - ec2:CreateStoreImageTask
+                  - ec2:ExportImage
+                  - ec2:CreateInstanceExportTask
+                  - sts:*
+                  - organizations:*
+                Resource: "*"
+              # v1.7.0: an image of YOURS is launched only after you attached it by tagging the
+              # image IdlefyAttached=<your Idlefy organization id>. A launch runs a startup
+              # script of the caller's choosing (IAM cannot limit user data), so whoever may
+              # launch an image may read what is on it: without this statement that was every
+              # image the account owns, a backup or a golden image included. The role cannot
+              # write the tag itself (it tags only what it creates, at creation). With
+              # AllowZoneMove the temporary disk copy Idlefy makes of a box (tagged
+              # IdlefyManaged at creation) is launchable too; with it off, nothing else is.
+              # Verified 2026-10-12: an untagged image and one attached to another organization
+              # are denied on the image.
+              - Sid: DenyOwnImageNotAttached
+                Effect: Deny
+                Action: ec2:RunInstances
+                Resource: arn:aws:ec2:*::image/*
+                Condition:
+                  StringEquals:
+                    ec2:Owner: !Ref "AWS::AccountId"
+                  StringNotEquals:
+                    ec2:ResourceTag/IdlefyAttached: !Ref OrgId
+                    ec2:ResourceTag/IdlefyManaged: !If [ZoneMove, "true", !Ref "AWS::NoValue"]
+              # v1.7.0: what a disk may cost. Idlefy creates gp3 disks only, so every other type
+              # is denied (io1 and io2 are the expensive ones), and so is a gp3 disk above 16,000
+              # IOPS. A launch that names no disk type is denied too. Size is capped by
+              # MaxVolumeGiB in the fence policy. Verified 2026-10-12.
+              - Sid: DenyOtherVolumeTypes
+                Effect: Deny
+                Action: ec2:RunInstances
+                Resource: arn:aws:ec2:*:*:volume/*
+                Condition:
+                  StringNotEquals:
+                    ec2:VolumeType: gp3
+              - Sid: DenyHighIops
+                Effect: Deny
+                Action: ec2:RunInstances
+                Resource: arn:aws:ec2:*:*:volume/*
+                Condition:
+                  NumericGreaterThan:
+                    ec2:VolumeIops: "16000"
       AssumeRolePolicyDocument: !Sub |
         {
           "Version": "2012-10-17",
