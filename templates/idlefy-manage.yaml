@@ -14,22 +14,27 @@ Metadata:
         Parameters: [OrgId, IssuerHost]
       - Label: { default: Options }
         Parameters: [CreateOidcProvider, IncludeMetrics]
+      - Label: { default: Sign-in (prefilled by Idlefy) }
+        Parameters: [Federation, IdentityPoolId, CognitoAccountId]
     ParameterLabels:
       OrgId: { default: Idlefy organization ID }
       IssuerHost: { default: Idlefy OIDC issuer host }
       CreateOidcProvider: { default: Create the OIDC identity provider }
       IncludeMetrics: { default: Allow CloudWatch metrics (Smart Protection) }
+      Federation: { default: How Idlefy signs in to this role }
+      IdentityPoolId: { default: Idlefy Cognito identity pool ID }
+      CognitoAccountId: { default: AWS account of the Idlefy identity pool }
 
 Parameters:
   OrgId:
     Type: String
     Description: Your Idlefy organization ID (UUID). Prefilled by Idlefy; do not change.
-    AllowedPattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+    AllowedPattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     ConstraintDescription: must be a lowercase UUID
   IssuerHost:
     Type: String
     Description: Host of the Idlefy OIDC issuer without https:// (app.idlefy.com). Prefilled by Idlefy; do not change.
-    AllowedPattern: ^[a-z0-9.-]+(/[A-Za-z0-9._-]+)*$
+    AllowedPattern: '^[a-z0-9.-]+(/[A-Za-z0-9._-]+)*$'
     MinLength: 3
   CreateOidcProvider:
     Type: String
@@ -38,15 +43,46 @@ Parameters:
     Description: >-
       Set to false if this AWS account already has the Idlefy OIDC provider (another Idlefy
       organization or a manual setup). Stack error "EntityAlreadyExists" means set false;
-      "Invalid principal in policy" means set true.
+      "Invalid principal in policy" means set true. Ignored when Federation is cognito.
   IncludeMetrics:
     Type: String
     Default: "true"
     AllowedValues: ["true", "false"]
     Description: Allow cloudwatch:GetMetricData and ListMetrics so Idlefy can see CPU/network activity before stopping a VM.
+  Federation:
+    Type: String
+    Default: oidc
+    AllowedValues: [oidc, cognito]
+    Description: >-
+      oidc - Idlefy's token is trusted through an OIDC identity provider in this account.
+      cognito - it is trusted through Idlefy's Cognito identity pool; no identity provider is
+      created or needed. Prefilled by Idlefy; do not change.
+  IdentityPoolId:
+    Type: String
+    Default: ""
+    AllowedPattern: '^$|^[a-z]{2}(-[a-z]+)+-[0-9]:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    ConstraintDescription: must be empty or a Cognito identity pool ID (region:uuid)
+    Description: Idlefy's Cognito identity pool (Federation cognito only). Prefilled by Idlefy; do not change.
+  CognitoAccountId:
+    Type: String
+    Default: ""
+    AllowedPattern: '^$|^[0-9]{12}$'
+    ConstraintDescription: must be empty or a 12-digit AWS account ID
+    Description: AWS account that holds Idlefy's identity pool (Federation cognito only). Prefilled by Idlefy; do not change.
+
+Rules:
+  CognitoNeedsPool:
+    RuleCondition: !Equals [!Ref Federation, cognito]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref IdentityPoolId, ""]]
+        AssertDescription: Federation cognito needs IdentityPoolId.
+      - Assert: !Not [!Equals [!Ref CognitoAccountId, ""]]
+        AssertDescription: Federation cognito needs CognitoAccountId.
 
 Conditions:
-  CreateProvider: !Equals [!Ref CreateOidcProvider, "true"]
+  UseOidc: !Equals [!Ref Federation, oidc]
+  UseCognito: !Not [!Condition UseOidc]
+  CreateProvider: !And [!Equals [!Ref CreateOidcProvider, "true"], !Condition UseOidc]
   WithMetrics: !Equals [!Ref IncludeMetrics, "true"]
 
 Resources:
@@ -67,28 +103,57 @@ Resources:
         - Suffix: !Join ["", [!Select [0, !Split ["-", !Ref OrgId]], !Select [1, !Split ["-", !Ref OrgId]]]]
       Description: Idlefy manage tier - discover and start/stop instances tagged Idlefy=enabled.
       MaxSessionDuration: 3600
-      AssumeRolePolicyDocument: !Sub
-        - |
-          {
-            "Version": "2012-10-17",
-            "Statement": [
-              {
-                "Effect": "Allow",
-                "Principal": { "Federated": "${ProviderArn}" },
-                "Action": "sts:AssumeRoleWithWebIdentity",
-                "Condition": {
-                  "StringEquals": {
-                    "${IssuerHost}:aud": "sts.amazonaws.com",
-                    "${IssuerHost}:sub": "${OrgId}"
+      # cognito: the pool is the audience; the pin (the amr entry Cognito adds for a token from
+      # this org's issuer) must be present, and no amr entry other than authenticated, the
+      # issuer and the pin may be. The pool alone admits nobody.
+      AssumeRolePolicyDocument: !If
+        - UseCognito
+        - !Sub
+          - |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": { "Federated": "cognito-identity.amazonaws.com" },
+                  "Action": "sts:AssumeRoleWithWebIdentity",
+                  "Condition": {
+                    "StringEquals": {
+                      "cognito-identity.amazonaws.com:aud": "${IdentityPoolId}"
+                    },
+                    "ForAnyValue:StringEquals": {
+                      "cognito-identity.amazonaws.com:amr": "${Pin}"
+                    },
+                    "ForAllValues:StringEquals": {
+                      "cognito-identity.amazonaws.com:amr": ["authenticated", "${IssuerHost}", "${Pin}"]
+                    }
                   }
                 }
-              }
-            ]
-          }
-        - ProviderArn: !If
-            - CreateProvider
-            - !Ref OidcProvider
-            - !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/${IssuerHost}
+              ]
+            }
+          - Pin: !Sub arn:aws:iam::${CognitoAccountId}:oidc-provider/${IssuerHost}:OIDC:${OrgId}
+        - !Sub
+          - |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": { "Federated": "${ProviderArn}" },
+                  "Action": "sts:AssumeRoleWithWebIdentity",
+                  "Condition": {
+                    "StringEquals": {
+                      "${IssuerHost}:aud": "sts.amazonaws.com",
+                      "${IssuerHost}:sub": "${OrgId}"
+                    }
+                  }
+                }
+              ]
+            }
+          - ProviderArn: !If
+              - CreateProvider
+              - !Ref OidcProvider
+              - !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/${IssuerHost}
       Policies:
         - PolicyName: IdlefyPolicy
           PolicyDocument:
@@ -147,6 +212,7 @@ Outputs:
     Value: !GetAtt ManageRole.Arn
   OidcProviderArn:
     Description: OIDC identity provider used by the trust policy.
+    Condition: UseOidc
     Value: !If
       - CreateProvider
       - !Ref OidcProvider

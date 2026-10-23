@@ -5,10 +5,19 @@ These fail CI when someone "just adds an action" without the tag/region fence.
 
 import fnmatch
 import json
+import re
+import uuid
 
 import pytest
-from conftest import ORG_ID, PROVISION_PARAMS, render
-from render import ACCOUNT_ID, REGION, STACK_NAME  # tests/ is on sys.path (conftest already imports from render)
+import yaml
+from conftest import COGNITO_ACCOUNT_ID, ISSUER_HOST, MANAGE_PIN, ORG_ID, POOL_ID, PROVISION_PARAMS, render
+from render import (  # tests/ is on sys.path (conftest already imports from render)
+    ACCOUNT_ID,
+    REGION,
+    STACK_NAME,
+    TEMPLATES,
+    load_template,
+)
 
 FENCE_TAG = "IdlefyManaged"
 REQUEST_TAG = f"aws:RequestTag/{FENCE_TAG}"
@@ -608,3 +617,75 @@ def test_ipv6_blocks_can_be_added_to_managed_vpcs_and_subnets_only(statements):
             # Exactly "true": a value list such as ["true", "false"] is an OR and would let an
             # unmanaged (IdlefyManaged=false) VPC or subnet through.
             assert s["Condition"]["StringEquals"][RESOURCE_TAG] == "true", s["Sid"]
+
+
+# -- manage trust, Federation=cognito ----------------------------------------------------
+
+COGNITO = "cognito-identity.amazonaws.com"
+# Characters that, inside a parameter substituted into the trust JSON (Fn::Sub), could close
+# the string, escape, end the substitution, split a value or widen a match.
+INJECTION_CHARS = ['"', "\\", "}", " ", "\t", "\n", "*"]
+# Parameters substituted into the manage trust policy, with a value core-api sends.
+SUBSTITUTED_PARAMS = {
+    "OrgId": ORG_ID,
+    "IssuerHost": ISSUER_HOST,
+    "IdentityPoolId": POOL_ID,
+    "CognitoAccountId": COGNITO_ACCOUNT_ID,
+}
+
+
+def test_manage_cognito_trust(manage_cognito):
+    """Exactly one statement: the pool as audience, the org's pin present, and no amr entry
+    other than authenticated, the issuer and the pin. Never StringLike, IfExists, Null or
+    sts:TagSession; never an aud-only trust."""
+    trust = json.loads(manage_cognito["ManageRole"]["Properties"]["AssumeRolePolicyDocument"])
+    assert trust["Version"] == "2012-10-17"
+    assert trust["Statement"] == [
+        {
+            "Effect": "Allow",
+            "Principal": {"Federated": COGNITO},
+            "Action": "sts:AssumeRoleWithWebIdentity",
+            "Condition": {
+                "StringEquals": {f"{COGNITO}:aud": POOL_ID},
+                "ForAnyValue:StringEquals": {f"{COGNITO}:amr": MANAGE_PIN},
+                "ForAllValues:StringEquals": {f"{COGNITO}:amr": ["authenticated", ISSUER_HOST, MANAGE_PIN]},
+            },
+        }
+    ]
+
+
+def _manage_parameter_nodes() -> dict:
+    root = yaml.compose((TEMPLATES / "idlefy-manage.yaml").read_text(), Loader=yaml.SafeLoader)
+    (params,) = [v for k, v in root.value if k.value == "Parameters"]
+    return {k.value: v for k, v in params.value}
+
+
+@pytest.mark.parametrize("name", sorted(SUBSTITUTED_PARAMS))
+def test_manage_substituted_params_reject_injection(name):
+    pdef = load_template("idlefy-manage.yaml")["Parameters"][name]
+    pattern = re.compile(pdef["AllowedPattern"])
+    valid = SUBSTITUTED_PARAMS[name]
+    assert pattern.fullmatch(valid), valid
+    for ch in INJECTION_CHARS:
+        for i in range(len(valid) + 1):
+            bad = valid[:i] + ch + valid[i:]
+            assert not pattern.fullmatch(bad), repr(bad)
+    # Single-quoted in the YAML: no escape processing, so the pattern is exactly what is written.
+    (style,) = [v.style for k, v in _manage_parameter_nodes()[name].value if k.value == "AllowedPattern"]
+    assert style == "'", f"{name}: AllowedPattern must be a single-quoted scalar"
+
+
+def test_manage_values_core_api_sends_still_match():
+    params = load_template("idlefy-manage.yaml")["Parameters"]
+    for host in ("app.idlefy.com", "app.idlefy.dev"):
+        assert re.fullmatch(params["IssuerHost"]["AllowedPattern"], host)
+    assert re.fullmatch(params["OrgId"]["AllowedPattern"], str(uuid.uuid4()))
+    # Empty is allowed (Federation=oidc); the CognitoNeedsPool rule requires both for cognito.
+    assert re.fullmatch(params["IdentityPoolId"]["AllowedPattern"], "")
+    assert re.fullmatch(params["CognitoAccountId"]["AllowedPattern"], "")
+
+
+def test_manage_federation_values():
+    federation = load_template("idlefy-manage.yaml")["Parameters"]["Federation"]
+    assert federation["AllowedValues"] == ["oidc", "cognito"]
+    assert federation["Default"] == "oidc"
