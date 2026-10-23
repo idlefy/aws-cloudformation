@@ -1,0 +1,92 @@
+{
+  "ManageRole.AssumeRolePolicyDocument": {
+    "Statement": [
+      {
+        "Action": "sts:AssumeRoleWithWebIdentity",
+        "Condition": {
+          "ForAllValues:StringEquals": {
+            "cognito-identity.amazonaws.com:amr": [
+              "authenticated",
+              "app.idlefy.dev",
+              "arn:aws:iam::995603458290:oidc-provider/app.idlefy.dev:OIDC:9b546eb4-2394-48c0-adc7-7386ccd50422"
+            ]
+          },
+          "ForAnyValue:StringEquals": {
+            "cognito-identity.amazonaws.com:amr": "arn:aws:iam::995603458290:oidc-provider/app.idlefy.dev:OIDC:9b546eb4-2394-48c0-adc7-7386ccd50422"
+          },
+          "StringEquals": {
+            "cognito-identity.amazonaws.com:aud": "eu-central-1:3fff6a44-f400-4cdd-ac13-e1ad7a9264a3"
+          }
+        },
+        "Effect": "Allow",
+        "Principal": {
+          "Federated": "cognito-identity.amazonaws.com"
+        }
+      }
+    ],
+    "Version": "2012-10-17"
+  },
+  "ManageRole.Policies.IdlefyPolicy": {
+    "Statement": [
+      {
+        "Action": [
+          "ec2:DescribeInstances",
+          "ec2:DescribeTags",
+          "ec2:DescribeInstanceTypes",
+          "ec2:DescribeRegions"
+        ],
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "IdlefyCore"
+      },
+      {
+        "Action": [
+          "ec2:StartInstances",
+          "ec2:StopInstances",
+          "ec2:RebootInstances"
+        ],
+        "Condition": {
+          "StringEquals": {
+            "ec2:ResourceTag/idlefy": "enabled"
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "IdlefyVMManagementLower"
+      },
+      {
+        "Action": [
+          "ec2:StartInstances",
+          "ec2:StopInstances",
+          "ec2:RebootInstances"
+        ],
+        "Condition": {
+          "StringEquals": {
+            "ec2:ResourceTag/Idlefy": "enabled"
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "IdlefyVMManagementUpper"
+      },
+      {
+        "Action": [
+          "pricing:GetProducts"
+        ],
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "IdlefyPricing"
+      },
+      {
+        "Action": [
+          "cloudwatch:GetMetricData",
+          "cloudwatch:ListMetrics"
+        ],
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "IdlefyMetrics"
+      }
+    ],
+    "Version": "2012-10-17"
+  }
+}

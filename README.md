@@ -6,12 +6,18 @@ can read exactly what gets created in your account before you click.
 
 | Stack | Template | Creates | Purpose |
 |---|---|---|---|
-| `Idlefy-Manage` | `templates/idlefy-manage.yaml` | OIDC identity provider (optional) + role `IdlefyManage-<org>` | Discover and start/stop the EC2 instances you tag `Idlefy=enabled`. Cannot create, terminate or resize anything. |
+| `Idlefy-Manage` | `templates/idlefy-manage.yaml` | OIDC identity provider (optional; never with `Federation=cognito`) + role `IdlefyManage-<org>` | Discover and start/stop the EC2 instances you tag `Idlefy=enabled`. Cannot create, terminate or resize anything. |
 | `Idlefy-Provision` | `templates/idlefy-provision.yaml` | role `IdlefyProvision-<org>` + managed policy `IdlefyProvisionPolicy-<org>` | Opt-in. Lets Idlefy create dev boxes for your organization inside a fence (below). Delete this stack to revoke provisioning; manage keeps working. |
 
 Both roles are assumed only through short-lived web-identity tokens that Idlefy issues for
 your organization (`AssumeRoleWithWebIdentity`, trust policy pinned to your organization
 id). No access keys are created, nothing is pasted back into Idlefy.
+
+Since v1.8.0 the token reaches your account one of two ways, set by the `Federation`
+parameter (Idlefy prefills it): `oidc` (the default, unchanged) through an OIDC identity
+provider in your account, or `cognito` through Idlefy's identity pool in Amazon Cognito, with
+no identity provider in your account. Both trusts are pinned to your organization id; see
+"Accounts created through settings.aws.com" and the compatibility contract below.
 
 Published templates: `https://idlefy-cfn-templates.s3.us-east-1.amazonaws.com/cfn/<version>/<template>.yaml`.
 The app always links to an exact version, never to `cfn/latest/`.
@@ -168,14 +174,42 @@ all of it, and the role has no permission to change outbound rules, so a machine
 restricted outbound traffic loses that restriction. Your groups are never edited or deleted:
 the role can only switch the machine to groups that carry `IdlefyManaged=true`.
 
+## Accounts created through settings.aws.com (v1.8.0)
+
+An AWS account made through AWS's new sign-up (you sign in with a Builder ID, Google or
+GitHub, the console is at `settings.aws.com`, resources live in "projects") is a member of an
+organization AWS manages for you. Its service control policy denies `iam:*Provider*`, on the
+Free plan and the Paid plan alike, and only AWS can change it. Such an account cannot hold an
+OIDC identity provider: a manage stack with `Federation=oidc` fails on `OidcProvider` with
+"explicit deny in a service control policy", and neither role could trust a provider anyway.
+
+`Federation=cognito` needs no identity provider in your account. Idlefy exchanges its own
+token for one from its identity pool in Amazon Cognito (an AWS service; the pool is in
+Idlefy's AWS account, `CognitoAccountId`), and your roles trust `cognito-identity.amazonaws.com`
+for that pool only. The pool alone admits nobody: each role also requires the `amr` entry that
+names your organization (and, for the provision role, its provision subject), and refuses a
+token carrying any other entry (contract table below). A token for another Idlefy
+organization, or the manage token at the provision role, is refused by your role. No access
+key or secret exists on either side. The same trust works in an account created either way,
+so Idlefy uses it for new connections; existing `oidc` stacks keep working unchanged.
+
+What you see in CloudTrail: each `AssumeRoleWithWebIdentity` call into your roles shows
+`userIdentity.identityProvider = cognito-identity.amazonaws.com`, and the web-identity user
+(`userIdentity.userName`) is a Cognito identity id of the form `<region>:<uuid>` from
+Idlefy's pool, not your organization id. The role named in the same event tells you whether
+it was the manage or the provision role.
+
+Such an account runs EC2 only in its project's region, so connect that region; on the Free
+plan only the Free Tier instance types launch.
+
 ## Compatibility contract with the Idlefy app
 
 | Item | Value | Change requires |
 |---|---|---|
 | Role names | `IdlefyManage-<org12>`, `IdlefyProvision-<org12>` where `org12` = first 12 hex chars of the organization UUID (computed inside the template) | major version |
 | Suggested stack names | `Idlefy-Manage`, `Idlefy-Provision` | minor |
-| Parameters | manage: `OrgId`, `IssuerHost`, `CreateOidcProvider`, `IncludeMetrics`; provision: `OrgId`, `IssuerHost`, `AllowedRegions`, `AllowedInstanceTypes`, `MaxVolumeGiB`, `AllowZoneMove` (v1.4.0, default `false`) | major (removing or renaming); minor (adding one that has a default) |
-| Trust conditions | `<issuer>:aud = sts.amazonaws.com`; manage `sub = <OrgId>`, provision `sub = <OrgId>:provision` | major |
+| Parameters | manage: `OrgId`, `IssuerHost`, `CreateOidcProvider`, `IncludeMetrics`; provision: `OrgId`, `IssuerHost`, `AllowedRegions`, `AllowedInstanceTypes`, `MaxVolumeGiB`, `AllowZoneMove` (v1.4.0, default `false`); both (v1.8.0): `Federation` (`oidc` or `cognito`, default `oidc`), `IdentityPoolId` (default empty, or `<region>:<uuid>`), `CognitoAccountId` (default empty, or 12 digits). Rule `CognitoNeedsPool`: with `Federation=cognito` both of the last two are required, and the stack is refused before anything is created | major (removing or renaming); minor (adding one that has a default) |
+| Trust conditions | Defaults keep the OIDC trust exactly as in v1.7.0. **`Federation=oidc`** (default): principal `arn:aws:iam::<your account>:oidc-provider/<issuer>`; `<issuer>:aud = sts.amazonaws.com`; manage `sub = <OrgId>`, provision `sub = <OrgId>:provision`. **`Federation=cognito`** (v1.8.0): principal `cognito-identity.amazonaws.com`, one statement, `Action` exactly `sts:AssumeRoleWithWebIdentity`; `StringEquals cognito-identity.amazonaws.com:aud = <IdentityPoolId>`; the pin `arn:aws:iam::<CognitoAccountId>:oidc-provider/<issuer>:OIDC:<OrgId>` (manage) or `…:OIDC:<OrgId>:provision` (provision) checked twice on `cognito-identity.amazonaws.com:amr`: `ForAnyValue:StringEquals = <pin>` (the pin must be present) and `ForAllValues:StringEquals = ["authenticated", "<issuer>", "<pin>"]` (no other entry may be). `StringEquals` only, never `StringLike` | major |
 | Fence tag | `IdlefyManaged = true` | major |
 | Provision stack output `TemplateVersion` (since v1.4.0) | the deployed version, e.g. `v1.4.0`; the app reads it to decide which actions the role supports. A stack without it is older than v1.4.0 | major |
 | `CAPABILITY_NAMED_IAM` | required (roles have fixed names); the console shows an acknowledgement checkbox | major |
@@ -183,11 +217,19 @@ the role can only switch the machine to groups that carry `IdlefyManaged=true`.
 
 ## Things to know
 
-- **One OIDC provider per account.** An AWS account can hold only one identity provider for
-  a given issuer URL. If this account already has the Idlefy provider (another Idlefy
-  organization, or a manual setup), launch the manage stack with `CreateOidcProvider=false`.
-  Idlefy prefills this when it knows. Error `EntityAlreadyExists` means set it to `false`;
-  `Invalid principal in policy` means set it to `true`.
+- **Never switch `Federation` on an existing stack.** Updating a manage stack that was created
+  with `CreateOidcProvider=true` from `Federation=oidc` to `cognito` **deletes the account's
+  OIDC provider** (the stack created it, and a cognito stack has none). Every other role that
+  trusts that provider stops working at once: a provision stack still on `oidc`, the roles of
+  a second Idlefy organization connected in the same AWS account, a role you made by hand.
+  The Idlefy app never builds such an update link: a connection keeps the `Federation` it was
+  made with, and "Update stack" keeps the parameters as they are.
+- **One OIDC provider per account** (`Federation=oidc`). An AWS account can hold only one
+  identity provider for a given issuer URL. If this account already has the Idlefy provider
+  (another Idlefy organization, or a manual setup), launch the manage stack with
+  `CreateOidcProvider=false`. Idlefy prefills this when it knows. Error `EntityAlreadyExists`
+  means set it to `false`; `Invalid principal in policy` means set it to `true`. With
+  `Federation=cognito` the parameter is ignored.
 - **Deleting the manage stack also deletes the OIDC provider** (when the stack created it),
   which silently breaks the provision role. Delete the provision stack first, or keep manage.
 - The provision role's `MaxSessionDuration` is 3600 s (the IAM minimum); Idlefy requests

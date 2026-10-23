@@ -1,5 +1,36 @@
 # Changelog
 
+## v1.8.0
+
+One connection flow for every AWS account, including accounts created through AWS's new
+sign-up (`settings.aws.com`). **With the parameters as they are, nothing changes**: updating
+an existing stack to v1.8.0 changes no resource but the `IdlefyTemplateVersion` tag on the
+role.
+
+- Both templates: **new parameters** `Federation` (`oidc`, the default, or `cognito`),
+  `IdentityPoolId` and `CognitoAccountId` (both empty by default). Idlefy prefills them in the
+  link it gives you.
+- **`Federation=cognito`: no OIDC identity provider in your account.** Your roles trust
+  `cognito-identity.amazonaws.com` for Idlefy's identity pool in Amazon Cognito, and only a
+  token that names your organization: the `amr` entry
+  `arn:aws:iam::<CognitoAccountId>:oidc-provider/<issuer>:OIDC:<your org id>` (manage) or
+  `…:provision` (provision) must be present, and no entry other than `authenticated`, the
+  issuer and that one may be. The manage stack creates no provider and has no
+  `OidcProviderArn` output. Role names, permissions and the provision fence are the same in
+  both modes; only who may assume the role differs.
+- Why: an account from the new sign-up belongs to an organization AWS manages, whose service
+  control policy denies `iam:*Provider*` on the Free and the Paid plan alike. The v1.7.0
+  manage stack failed there on `OidcProvider`. In CloudTrail, the web-identity user of a
+  `cognito` stack is a Cognito identity id (`<region>:<uuid>`), not your organization id.
+- New rule `CognitoNeedsPool`: with `Federation=cognito` and no `IdentityPoolId` or
+  `CognitoAccountId`, the stack is refused before anything is created.
+- **Never switch `Federation` on an existing stack.** Updating a manage stack created with
+  `CreateOidcProvider=true` from `oidc` to `cognito` deletes the account's OIDC provider, and
+  every other role that trusts it stops working: a provision stack still on `oidc`, a second
+  Idlefy organization in the same AWS account, a role you made by hand. The Idlefy app never
+  builds such an update link.
+- The app works with v1.7.0 and v1.8.0 stacks alike; existing `oidc` connections stay `oidc`.
+
 ## v1.7.0
 
 Narrower reach, after an outside review of v1.6.0. No new parameter; updating an existing
