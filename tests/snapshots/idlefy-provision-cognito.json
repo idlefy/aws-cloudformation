@@ -1,0 +1,479 @@
+{
+  "ProvisionPolicy.PolicyDocument": {
+    "Statement": [
+      {
+        "Action": [
+          "ec2:DescribeAddresses",
+          "ec2:DescribeAvailabilityZones",
+          "ec2:DescribeImages",
+          "ec2:DescribeInstanceTypeOfferings",
+          "ec2:DescribeInstanceTypes",
+          "ec2:DescribeInstances",
+          "ec2:DescribeInternetGateways",
+          "ec2:DescribeNetworkInterfaces",
+          "ec2:DescribeRouteTables",
+          "ec2:DescribeSecurityGroups",
+          "ec2:DescribeSnapshots",
+          "ec2:DescribeSubnets",
+          "ec2:DescribeVolumes",
+          "ec2:DescribeVpcs"
+        ],
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "Describe"
+      },
+      {
+        "Action": [
+          "servicequotas:GetServiceQuota",
+          "servicequotas:GetAWSDefaultServiceQuota",
+          "servicequotas:ListServiceQuotas",
+          "pricing:GetProducts"
+        ],
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "DescribeGlobal"
+      },
+      {
+        "Action": [
+          "ec2:GetEbsEncryptionByDefault",
+          "ec2:GetEbsDefaultKmsKeyId"
+        ],
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "EbsEncryptionDefaults"
+      },
+      {
+        "Action": "kms:DescribeKey",
+        "Effect": "Allow",
+        "Resource": "arn:aws:kms:*:123456789012:key/*",
+        "Sid": "DiskKeyRead"
+      },
+      {
+        "Action": [
+          "ssm:GetParameter"
+        ],
+        "Effect": "Allow",
+        "Resource": [
+          "arn:aws:ssm:*::parameter/aws/service/canonical/ubuntu/*",
+          "arn:aws:ssm:*::parameter/aws/service/debian/release/*"
+        ],
+        "Sid": "ImageLookup"
+      },
+      {
+        "Action": "cloudformation:DescribeStacks",
+        "Effect": "Allow",
+        "Resource": "arn:aws:cloudformation:us-east-1:123456789012:stack/Idlefy-Provision/*",
+        "Sid": "ReadOwnStack"
+      },
+      {
+        "Action": [
+          "ec2:CreateVpc",
+          "ec2:CreateSubnet",
+          "ec2:CreateInternetGateway",
+          "ec2:CreateRouteTable",
+          "ec2:CreateSecurityGroup",
+          "ec2:AllocateAddress"
+        ],
+        "Condition": {
+          "StringEquals": {
+            "aws:RequestTag/IdlefyManaged": "true"
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "CreateTagged"
+      },
+      {
+        "Action": [
+          "ec2:CreateSubnet",
+          "ec2:CreateSecurityGroup",
+          "ec2:CreateRouteTable"
+        ],
+        "Condition": {
+          "StringEquals": {
+            "ec2:ResourceTag/IdlefyManaged": "true"
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "arn:aws:ec2:*:*:vpc/*",
+        "Sid": "CreateInManagedVpc"
+      },
+      {
+        "Action": "ec2:CreateSecurityGroup",
+        "Condition": {
+          "StringEquals": {
+            "ec2:ResourceTag/IdlefyAttached": "9b546eb4-2394-48c0-adc7-7386ccd50422"
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "arn:aws:ec2:*:*:vpc/*",
+        "Sid": "CreateGroupInAttachedVpc"
+      },
+      {
+        "Action": "ec2:RunInstances",
+        "Condition": {
+          "StringEquals": {
+            "aws:RequestTag/IdlefyManaged": "true"
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "arn:aws:ec2:*:*:instance/*",
+        "Sid": "RunInstancesInstance"
+      },
+      {
+        "Action": "ec2:ModifyInstanceAttribute",
+        "Condition": {
+          "Null": {
+            "ec2:Attribute/InstanceType": "false"
+          },
+          "StringEquals": {
+            "ec2:ResourceTag/IdlefyManaged": "true"
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "arn:aws:ec2:*:*:instance/*",
+        "Sid": "ChangeInstanceType"
+      },
+      {
+        "Action": "ec2:ModifyInstanceAttribute",
+        "Condition": {
+          "Null": {
+            "ec2:Attribute/InstanceType": "true"
+          },
+          "StringEquals": {
+            "ec2:ResourceTag/IdlefyManaged": "true"
+          }
+        },
+        "Effect": "Allow",
+        "Resource": [
+          "arn:aws:ec2:*:*:instance/*",
+          "arn:aws:ec2:*:*:security-group/*"
+        ],
+        "Sid": "SwitchToManagedGroups"
+      },
+      {
+        "Action": "ec2:RunInstances",
+        "Condition": {
+          "NumericLessThanEquals": {
+            "ec2:VolumeSize": 1024
+          },
+          "StringEquals": {
+            "aws:RequestTag/IdlefyManaged": "true"
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "arn:aws:ec2:*:*:volume/*",
+        "Sid": "RunInstancesVolume"
+      },
+      {
+        "Action": "ec2:RunInstances",
+        "Condition": {
+          "StringEquals": {
+            "ec2:ResourceTag/IdlefyManaged": "true"
+          }
+        },
+        "Effect": "Allow",
+        "Resource": [
+          "arn:aws:ec2:*:*:subnet/*",
+          "arn:aws:ec2:*:*:security-group/*"
+        ],
+        "Sid": "RunInstancesManagedNetwork"
+      },
+      {
+        "Action": "ec2:RunInstances",
+        "Condition": {
+          "StringEquals": {
+            "ec2:ResourceTag/IdlefyAttached": "9b546eb4-2394-48c0-adc7-7386ccd50422"
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "arn:aws:ec2:*:*:subnet/*",
+        "Sid": "RunInAttachedSubnet"
+      },
+      {
+        "Action": "ec2:RunInstances",
+        "Condition": {
+          "StringEquals": {
+            "aws:RequestTag/IdlefyManaged": "true"
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "arn:aws:ec2:*:*:network-interface/*",
+        "Sid": "RunInstancesNetworkInterface"
+      },
+      {
+        "Action": "ec2:RunInstances",
+        "Condition": {
+          "StringEquals": {
+            "ec2:Owner": [
+              "099720109477",
+              "amazon",
+              "136693071363",
+              "123456789012"
+            ]
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "arn:aws:ec2:*::image/*",
+        "Sid": "RunInstancesImage"
+      },
+      {
+        "Action": [
+          "kms:Decrypt",
+          "kms:DescribeKey",
+          "kms:GenerateDataKeyWithoutPlaintext",
+          "kms:ReEncrypt*"
+        ],
+        "Condition": {
+          "StringEquals": {
+            "kms:CallerAccount": "123456789012"
+          },
+          "StringLike": {
+            "kms:ViaService": "ec2.*.amazonaws.com"
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "arn:aws:kms:*:123456789012:key/*",
+        "Sid": "EbsEncryptionKms"
+      },
+      {
+        "Action": "kms:CreateGrant",
+        "Condition": {
+          "Bool": {
+            "kms:GrantIsForAWSResource": "true"
+          },
+          "StringEquals": {
+            "kms:CallerAccount": "123456789012"
+          },
+          "StringLike": {
+            "kms:ViaService": "ec2.*.amazonaws.com"
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "arn:aws:kms:*:123456789012:key/*",
+        "Sid": "EbsEncryptionKmsGrant"
+      },
+      {
+        "Action": "ec2:CreateTags",
+        "Condition": {
+          "StringEquals": {
+            "ec2:CreateAction": [
+              "RunInstances",
+              "CreateVpc",
+              "CreateSubnet",
+              "CreateInternetGateway",
+              "CreateRouteTable",
+              "CreateSecurityGroup",
+              "AllocateAddress"
+            ]
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "CreateTagsOnCreate"
+      },
+      {
+        "Action": [
+          "ec2:TerminateInstances",
+          "ec2:StopInstances",
+          "ec2:StartInstances",
+          "ec2:RebootInstances",
+          "ec2:DeleteVpc",
+          "ec2:ModifyVpcAttribute",
+          "ec2:AssociateVpcCidrBlock",
+          "ec2:AssociateSubnetCidrBlock",
+          "ec2:DeleteSubnet",
+          "ec2:ModifySubnetAttribute",
+          "ec2:DeleteInternetGateway",
+          "ec2:AttachInternetGateway",
+          "ec2:DetachInternetGateway",
+          "ec2:DeleteRouteTable",
+          "ec2:CreateRoute",
+          "ec2:DeleteRoute",
+          "ec2:AssociateRouteTable",
+          "ec2:DisassociateRouteTable",
+          "ec2:DeleteSecurityGroup",
+          "ec2:AuthorizeSecurityGroupIngress",
+          "ec2:RevokeSecurityGroupIngress",
+          "ec2:AssociateAddress",
+          "ec2:DisassociateAddress",
+          "ec2:ReleaseAddress"
+        ],
+        "Condition": {
+          "StringEquals": {
+            "ec2:ResourceTag/IdlefyManaged": "true"
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "MutateManaged"
+      },
+      {
+        "Action": "ec2:ModifyInstanceAttribute",
+        "Condition": {
+          "Null": {
+            "ec2:Attribute/Groups": "true",
+            "ec2:Attribute/InstanceType": "true"
+          }
+        },
+        "Effect": "Deny",
+        "Resource": "arn:aws:ec2:*:*:instance/*",
+        "Sid": "DenyOtherInstanceAttributes"
+      },
+      {
+        "Action": "ec2:ModifyInstanceAttribute",
+        "Condition": {
+          "Null": {
+            "ec2:Attribute/UserData": "false"
+          }
+        },
+        "Effect": "Deny",
+        "Resource": "*",
+        "Sid": "DenyUserDataChange"
+      }
+    ],
+    "Version": "2012-10-17"
+  },
+  "ProvisionRole.AssumeRolePolicyDocument": {
+    "Statement": [
+      {
+        "Action": "sts:AssumeRoleWithWebIdentity",
+        "Condition": {
+          "ForAllValues:StringEquals": {
+            "cognito-identity.amazonaws.com:amr": [
+              "authenticated",
+              "app.idlefy.dev",
+              "arn:aws:iam::995603458290:oidc-provider/app.idlefy.dev:OIDC:9b546eb4-2394-48c0-adc7-7386ccd50422:provision"
+            ]
+          },
+          "ForAnyValue:StringEquals": {
+            "cognito-identity.amazonaws.com:amr": "arn:aws:iam::995603458290:oidc-provider/app.idlefy.dev:OIDC:9b546eb4-2394-48c0-adc7-7386ccd50422:provision"
+          },
+          "StringEquals": {
+            "cognito-identity.amazonaws.com:aud": "eu-central-1:3fff6a44-f400-4cdd-ac13-e1ad7a9264a3"
+          }
+        },
+        "Effect": "Allow",
+        "Principal": {
+          "Federated": "cognito-identity.amazonaws.com"
+        }
+      }
+    ],
+    "Version": "2012-10-17"
+  },
+  "ProvisionRole.Policies.IdlefyProvisionLimits": {
+    "Statement": [
+      {
+        "Action": "ec2:RunInstances",
+        "Condition": {
+          "StringNotEquals": {
+            "ec2:InstanceType": [
+              "m7i.large",
+              "m7i.xlarge",
+              "g6.xlarge"
+            ]
+          }
+        },
+        "Effect": "Deny",
+        "Resource": "arn:aws:ec2:*:*:instance/*",
+        "Sid": "DenyLaunchOutsideAllowedTypes"
+      },
+      {
+        "Action": "ec2:ModifyInstanceAttribute",
+        "Condition": {
+          "Null": {
+            "ec2:Attribute/InstanceType": "false"
+          },
+          "StringNotEquals": {
+            "ec2:Attribute/InstanceType": [
+              "m7i.large",
+              "m7i.xlarge",
+              "g6.xlarge"
+            ]
+          }
+        },
+        "Effect": "Deny",
+        "Resource": "*",
+        "Sid": "DenyTypeChangeOutsideAllowedTypes"
+      },
+      {
+        "Action": [
+          "ec2:*",
+          "ec2-instance-connect:*"
+        ],
+        "Condition": {
+          "StringNotEquals": {
+            "aws:RequestedRegion": [
+              "eu-central-1",
+              "us-east-1"
+            ]
+          }
+        },
+        "Effect": "Deny",
+        "Resource": "*",
+        "Sid": "DenyOutsideAllowedRegions"
+      },
+      {
+        "Action": [
+          "ec2-instance-connect:*",
+          "ec2:GetConsole*",
+          "ec2:DescribeInstanceAttribute",
+          "iam:PassRole",
+          "ec2:AssociateIamInstanceProfile",
+          "ec2:ReplaceIamInstanceProfileAssociation",
+          "ec2:DeleteTags",
+          "ec2:ModifySnapshotAttribute",
+          "ec2:ModifyImageAttribute",
+          "ebs:*",
+          "ec2:CopySnapshot",
+          "ec2:CopyImage",
+          "ec2:CreateStoreImageTask",
+          "ec2:ExportImage",
+          "ec2:CreateInstanceExportTask",
+          "sts:*",
+          "organizations:*"
+        ],
+        "Effect": "Deny",
+        "Resource": "*",
+        "Sid": "DenyEscalation"
+      },
+      {
+        "Action": "ec2:RunInstances",
+        "Condition": {
+          "StringEquals": {
+            "ec2:Owner": "123456789012"
+          },
+          "StringNotEquals": {
+            "ec2:ResourceTag/IdlefyAttached": "9b546eb4-2394-48c0-adc7-7386ccd50422"
+          }
+        },
+        "Effect": "Deny",
+        "Resource": "arn:aws:ec2:*::image/*",
+        "Sid": "DenyOwnImageNotAttached"
+      },
+      {
+        "Action": "ec2:RunInstances",
+        "Condition": {
+          "StringNotEquals": {
+            "ec2:VolumeType": "gp3"
+          }
+        },
+        "Effect": "Deny",
+        "Resource": "arn:aws:ec2:*:*:volume/*",
+        "Sid": "DenyOtherVolumeTypes"
+      },
+      {
+        "Action": "ec2:RunInstances",
+        "Condition": {
+          "NumericGreaterThan": {
+            "ec2:VolumeIops": "16000"
+          }
+        },
+        "Effect": "Deny",
+        "Resource": "arn:aws:ec2:*:*:volume/*",
+        "Sid": "DenyHighIops"
+      }
+    ],
+    "Version": "2012-10-17"
+  }
+}

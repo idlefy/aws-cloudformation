@@ -19,6 +19,8 @@ Metadata:
         Parameters: [AllowedRegions, AllowedInstanceTypes, MaxVolumeGiB]
       - Label: { default: Optional abilities }
         Parameters: [AllowZoneMove]
+      - Label: { default: Sign-in (prefilled by Idlefy) }
+        Parameters: [Federation, IdentityPoolId, CognitoAccountId]
     ParameterLabels:
       OrgId: { default: Idlefy organization ID }
       IssuerHost: { default: Idlefy OIDC issuer host }
@@ -26,17 +28,20 @@ Metadata:
       AllowedInstanceTypes: { default: Instance types Idlefy may launch }
       MaxVolumeGiB: { default: Largest root volume Idlefy may create (GiB) }
       AllowZoneMove: { default: Let Idlefy move a dev box to another availability zone }
+      Federation: { default: How Idlefy signs in to this role }
+      IdentityPoolId: { default: Idlefy Cognito identity pool ID }
+      CognitoAccountId: { default: AWS account of the Idlefy identity pool }
 
 Parameters:
   OrgId:
     Type: String
     Description: Your Idlefy organization ID (UUID). Prefilled by Idlefy; do not change.
-    AllowedPattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+    AllowedPattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     ConstraintDescription: must be a lowercase UUID
   IssuerHost:
     Type: String
     Description: Host of the Idlefy OIDC issuer without https:// (app.idlefy.com). Prefilled by Idlefy; do not change.
-    AllowedPattern: ^[a-z0-9.-]+(/[A-Za-z0-9._-]+)*$
+    AllowedPattern: '^[a-z0-9.-]+(/[A-Za-z0-9._-]+)*$'
     MinLength: 3
   AllowedRegions:
     Type: CommaDelimitedList
@@ -63,9 +68,40 @@ Parameters:
       shared or exported and is deleted after the move; every step is in your CloudTrail
       (CreateImage, RunInstances). Leave it off and Idlefy can never reach the data on a box;
       people can still retry and switch to another allowed machine type.
+  Federation:
+    Type: String
+    Default: oidc
+    AllowedValues: [oidc, cognito]
+    Description: >-
+      oidc - Idlefy's token is trusted through an OIDC identity provider in this account.
+      cognito - it is trusted through Idlefy's Cognito identity pool; no identity provider is
+      needed. Prefilled by Idlefy; do not change.
+  IdentityPoolId:
+    Type: String
+    Default: ""
+    AllowedPattern: '^$|^[a-z]{2}(-[a-z]+)+-[0-9]:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    ConstraintDescription: must be empty or a Cognito identity pool ID (region:uuid)
+    Description: Idlefy's Cognito identity pool (Federation cognito only). Prefilled by Idlefy; do not change.
+  CognitoAccountId:
+    Type: String
+    Default: ""
+    AllowedPattern: '^$|^[0-9]{12}$'
+    ConstraintDescription: must be empty or a 12-digit AWS account ID
+    Description: AWS account that holds Idlefy's identity pool (Federation cognito only). Prefilled by Idlefy; do not change.
+
+Rules:
+  CognitoNeedsPool:
+    RuleCondition: !Equals [!Ref Federation, cognito]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref IdentityPoolId, ""]]
+        AssertDescription: Federation cognito needs IdentityPoolId.
+      - Assert: !Not [!Equals [!Ref CognitoAccountId, ""]]
+        AssertDescription: Federation cognito needs CognitoAccountId.
 
 Conditions:
   ZoneMove: !Equals [!Ref AllowZoneMove, "true"]
+  UseOidc: !Equals [!Ref Federation, oidc]
+  UseCognito: !Not [!Condition UseOidc]
 
 Resources:
   ProvisionPolicy:
@@ -590,23 +626,53 @@ Resources:
                 Condition:
                   NumericGreaterThan:
                     ec2:VolumeIops: "16000"
-      AssumeRolePolicyDocument: !Sub |
-        {
-          "Version": "2012-10-17",
-          "Statement": [
+      # v1.8.0, cognito: the pool is the audience; the pin (the amr entry Cognito adds for a
+      # token from this org's issuer with the provision subject) must be present, and no amr
+      # entry other than authenticated, the issuer and the pin may be. The manage pin lacks
+      # ":provision" and StringEquals never matches it, so a manage token cannot assume this role.
+      AssumeRolePolicyDocument: !If
+        - UseCognito
+        - !Sub
+          - |
             {
-              "Effect": "Allow",
-              "Principal": { "Federated": "arn:aws:iam::${AWS::AccountId}:oidc-provider/${IssuerHost}" },
-              "Action": "sts:AssumeRoleWithWebIdentity",
-              "Condition": {
-                "StringEquals": {
-                  "${IssuerHost}:aud": "sts.amazonaws.com",
-                  "${IssuerHost}:sub": "${OrgId}:provision"
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": { "Federated": "cognito-identity.amazonaws.com" },
+                  "Action": "sts:AssumeRoleWithWebIdentity",
+                  "Condition": {
+                    "StringEquals": {
+                      "cognito-identity.amazonaws.com:aud": "${IdentityPoolId}"
+                    },
+                    "ForAnyValue:StringEquals": {
+                      "cognito-identity.amazonaws.com:amr": "${Pin}"
+                    },
+                    "ForAllValues:StringEquals": {
+                      "cognito-identity.amazonaws.com:amr": ["authenticated", "${IssuerHost}", "${Pin}"]
+                    }
+                  }
+                }
+              ]
+            }
+          - Pin: !Sub arn:aws:iam::${CognitoAccountId}:oidc-provider/${IssuerHost}:OIDC:${OrgId}:provision
+        - !Sub |
+          {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Principal": { "Federated": "arn:aws:iam::${AWS::AccountId}:oidc-provider/${IssuerHost}" },
+                "Action": "sts:AssumeRoleWithWebIdentity",
+                "Condition": {
+                  "StringEquals": {
+                    "${IssuerHost}:aud": "sts.amazonaws.com",
+                    "${IssuerHost}:sub": "${OrgId}:provision"
+                  }
                 }
               }
-            }
-          ]
-        }
+            ]
+          }
       Tags:
         - { Key: Idlefy, Value: provision }
         - { Key: IdlefyOrg, Value: !Ref OrgId }

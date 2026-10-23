@@ -10,7 +10,19 @@ import uuid
 
 import pytest
 import yaml
-from conftest import COGNITO_ACCOUNT_ID, ISSUER_HOST, MANAGE_PIN, ORG_ID, POOL_ID, PROVISION_PARAMS, render
+from conftest import (
+    COGNITO_ACCOUNT_ID,
+    ISSUER_HOST,
+    MANAGE_COGNITO_PARAMS,
+    MANAGE_PARAMS,
+    MANAGE_PIN,
+    ORG_ID,
+    POOL_ID,
+    PROVISION_COGNITO_PARAMS,
+    PROVISION_PARAMS,
+    PROVISION_PIN,
+    render,
+)
 from render import (  # tests/ is on sys.path (conftest already imports from render)
     ACCOUNT_ID,
     REGION,
@@ -619,13 +631,21 @@ def test_ipv6_blocks_can_be_added_to_managed_vpcs_and_subnets_only(statements):
             assert s["Condition"]["StringEquals"][RESOURCE_TAG] == "true", s["Sid"]
 
 
-# -- manage trust, Federation=cognito ----------------------------------------------------
+# -- trusts, Federation=cognito (both templates) ----------------------------------------
 
 COGNITO = "cognito-identity.amazonaws.com"
+MANAGE_TEMPLATE = "idlefy-manage.yaml"
+PROVISION_TEMPLATE = "idlefy-provision.yaml"
+TEMPLATE_NAMES = [MANAGE_TEMPLATE, PROVISION_TEMPLATE]
+# Each template with its cognito parameters, its role and its OWN pin (never the other's).
+COGNITO_RENDERS = {
+    MANAGE_TEMPLATE: (MANAGE_COGNITO_PARAMS, "ManageRole", MANAGE_PIN),
+    PROVISION_TEMPLATE: (PROVISION_COGNITO_PARAMS, "ProvisionRole", PROVISION_PIN),
+}
 # Characters that, inside a parameter substituted into the trust JSON (Fn::Sub), could close
 # the string, escape, end the substitution, split a value or widen a match.
 INJECTION_CHARS = ['"', "\\", "}", " ", "\t", "\n", "*"]
-# Parameters substituted into the manage trust policy, with a value core-api sends.
+# Parameters substituted into the trust policies, with a value core-api sends.
 SUBSTITUTED_PARAMS = {
     "OrgId": ORG_ID,
     "IssuerHost": ISSUER_HOST,
@@ -634,35 +654,84 @@ SUBSTITUTED_PARAMS = {
 }
 
 
-def test_manage_cognito_trust(manage_cognito):
-    """Exactly one statement: the pool as audience, the org's pin present, and no amr entry
-    other than authenticated, the issuer and the pin. Never StringLike, IfExists, Null or
-    sts:TagSession; never an aud-only trust."""
-    trust = json.loads(manage_cognito["ManageRole"]["Properties"]["AssumeRolePolicyDocument"])
-    assert trust["Version"] == "2012-10-17"
-    assert trust["Statement"] == [
+def _cognito_trust_statements(pin: str) -> list:
+    return [
         {
             "Effect": "Allow",
             "Principal": {"Federated": COGNITO},
             "Action": "sts:AssumeRoleWithWebIdentity",
             "Condition": {
                 "StringEquals": {f"{COGNITO}:aud": POOL_ID},
-                "ForAnyValue:StringEquals": {f"{COGNITO}:amr": MANAGE_PIN},
-                "ForAllValues:StringEquals": {f"{COGNITO}:amr": ["authenticated", ISSUER_HOST, MANAGE_PIN]},
+                "ForAnyValue:StringEquals": {f"{COGNITO}:amr": pin},
+                "ForAllValues:StringEquals": {f"{COGNITO}:amr": ["authenticated", ISSUER_HOST, pin]},
             },
         }
     ]
 
 
-def _manage_parameter_nodes() -> dict:
-    root = yaml.compose((TEMPLATES / "idlefy-manage.yaml").read_text(), Loader=yaml.SafeLoader)
+def test_manage_cognito_trust(manage_cognito):
+    """Exactly one statement: the pool as audience, the org's pin present, and no amr entry
+    other than authenticated, the issuer and the pin. Never StringLike, IfExists, Null or
+    sts:TagSession; never an aud-only trust."""
+    trust = json.loads(manage_cognito["ManageRole"]["Properties"]["AssumeRolePolicyDocument"])
+    assert trust["Version"] == "2012-10-17"
+    assert trust["Statement"] == _cognito_trust_statements(MANAGE_PIN)
+
+
+def test_provision_cognito_trust(provision_cognito):
+    """As the manage trust, pinned to the org's provision subject: a manage token (whose pin
+    lacks ":provision") cannot assume this role, and StringEquals keeps it from matching."""
+    trust = json.loads(provision_cognito["ProvisionRole"]["Properties"]["AssumeRolePolicyDocument"])
+    assert trust["Version"] == "2012-10-17"
+    assert trust["Statement"] == _cognito_trust_statements(PROVISION_PIN)
+
+
+@pytest.mark.parametrize("template", TEMPLATE_NAMES)
+def test_cognito_trust_shape_invariant(template):
+    params, role, pin = COGNITO_RENDERS[template]
+    trust = json.loads(render(template, params)[role]["Properties"]["AssumeRolePolicyDocument"])
+    (stmt,) = trust["Statement"]
+    assert stmt["Effect"] == "Allow"
+    assert stmt["Action"] == "sts:AssumeRoleWithWebIdentity"
+    cond = stmt["Condition"]
+    assert set(cond) == {"StringEquals", "ForAnyValue:StringEquals", "ForAllValues:StringEquals"}
+    assert set(cond["StringEquals"]) == {f"{COGNITO}:aud"}
+    # The pin is mandatory and is this template's own: a single string, never a list.
+    assert cond["ForAnyValue:StringEquals"] == {f"{COGNITO}:amr": pin}
+    assert isinstance(cond["ForAnyValue:StringEquals"][f"{COGNITO}:amr"], str)
+    # No amr entry other than these three: a developer login or a second linked login fails.
+    assert cond["ForAllValues:StringEquals"] == {f"{COGNITO}:amr": ["authenticated", ISSUER_HOST, pin]}
+    for op in cond:
+        assert not any(bad in op for bad in ("StringLike", "IfExists", "Null")), op
+    assert "sts:TagSession" not in (TEMPLATES / template).read_text()
+    assert "sts:TagSession" not in json.dumps(render(template, params))
+
+
+@pytest.mark.parametrize(
+    ("template", "extra"),
+    [
+        (MANAGE_TEMPLATE, {}),
+        (MANAGE_TEMPLATE, {"CreateOidcProvider": "false"}),
+        (MANAGE_TEMPLATE, {"Federation": "oidc"}),
+        (MANAGE_TEMPLATE, {"Federation": "oidc", "CreateOidcProvider": "false"}),
+        (PROVISION_TEMPLATE, {}),
+        (PROVISION_TEMPLATE, {"AllowZoneMove": "true"}),
+        (PROVISION_TEMPLATE, {"Federation": "oidc"}),
+    ],
+)
+def test_oidc_renders_have_no_cognito_principal(template, extra):
+    base = MANAGE_PARAMS if template == MANAGE_TEMPLATE else PROVISION_PARAMS
+    assert "cognito-identity" not in json.dumps(render(template, {**base, **extra}))
+
+
+def _parameter_nodes(template: str) -> dict:
+    root = yaml.compose((TEMPLATES / template).read_text(), Loader=yaml.SafeLoader)
     (params,) = [v for k, v in root.value if k.value == "Parameters"]
     return {k.value: v for k, v in params.value}
 
 
-@pytest.mark.parametrize("name", sorted(SUBSTITUTED_PARAMS))
-def test_manage_substituted_params_reject_injection(name):
-    pdef = load_template("idlefy-manage.yaml")["Parameters"][name]
+def _assert_rejects_injection(template: str, name: str) -> None:
+    pdef = load_template(template)["Parameters"][name]
     pattern = re.compile(pdef["AllowedPattern"])
     valid = SUBSTITUTED_PARAMS[name]
     assert pattern.fullmatch(valid), valid
@@ -671,12 +740,23 @@ def test_manage_substituted_params_reject_injection(name):
             bad = valid[:i] + ch + valid[i:]
             assert not pattern.fullmatch(bad), repr(bad)
     # Single-quoted in the YAML: no escape processing, so the pattern is exactly what is written.
-    (style,) = [v.style for k, v in _manage_parameter_nodes()[name].value if k.value == "AllowedPattern"]
-    assert style == "'", f"{name}: AllowedPattern must be a single-quoted scalar"
+    (style,) = [v.style for k, v in _parameter_nodes(template)[name].value if k.value == "AllowedPattern"]
+    assert style == "'", f"{template} {name}: AllowedPattern must be a single-quoted scalar"
 
 
-def test_manage_values_core_api_sends_still_match():
-    params = load_template("idlefy-manage.yaml")["Parameters"]
+@pytest.mark.parametrize("name", sorted(SUBSTITUTED_PARAMS))
+def test_manage_substituted_params_reject_injection(name):
+    _assert_rejects_injection(MANAGE_TEMPLATE, name)
+
+
+@pytest.mark.parametrize("name", sorted(SUBSTITUTED_PARAMS))
+def test_provision_substituted_params_reject_injection(name):
+    _assert_rejects_injection(PROVISION_TEMPLATE, name)
+
+
+@pytest.mark.parametrize("template", TEMPLATE_NAMES)
+def test_values_core_api_sends_still_match(template):
+    params = load_template(template)["Parameters"]
     for host in ("app.idlefy.com", "app.idlefy.dev"):
         assert re.fullmatch(params["IssuerHost"]["AllowedPattern"], host)
     assert re.fullmatch(params["OrgId"]["AllowedPattern"], str(uuid.uuid4()))
@@ -685,7 +765,8 @@ def test_manage_values_core_api_sends_still_match():
     assert re.fullmatch(params["CognitoAccountId"]["AllowedPattern"], "")
 
 
-def test_manage_federation_values():
-    federation = load_template("idlefy-manage.yaml")["Parameters"]["Federation"]
+@pytest.mark.parametrize("template", TEMPLATE_NAMES)
+def test_federation_values(template):
+    federation = load_template(template)["Parameters"]["Federation"]
     assert federation["AllowedValues"] == ["oidc", "cognito"]
     assert federation["Default"] == "oidc"

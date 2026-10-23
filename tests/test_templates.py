@@ -11,6 +11,8 @@ from conftest import (
     ORG_ID,
     ORG_SUFFIX,
     POOL_ID,
+    PROVISION_COGNITO_PARAMS,
+    PROVISION_PARAMS,
     SNAPSHOTS,
     assert_snapshot,
     policy_documents,
@@ -197,6 +199,68 @@ def test_manage_cognito_rule_requires_pool():
 
 def test_snapshot_manage_cognito(manage_cognito, request):
     assert_snapshot("idlefy-manage-cognito", policy_documents(manage_cognito), request)
+
+
+# -- Federation=cognito (provision) ------------------------------------------------------
+
+PROVISION = "idlefy-provision.yaml"
+# The outputs as v1.7.0 renders them (the same for every parameter value).
+V170_PROVISION_OUTPUTS = {
+    "RoleArn": "<getatt:ProvisionRole.Arn>",
+    "PolicyArn": "<ref:ProvisionPolicy>",
+    "TemplateVersion": "__TEMPLATE_VERSION__",
+}
+
+
+@pytest.mark.parametrize(
+    ("extra", "snapshot"),
+    [
+        ({}, "idlefy-provision"),
+        ({"Federation": "oidc"}, "idlefy-provision"),
+        ({"AllowZoneMove": "true"}, "idlefy-provision-zone-move"),
+        ({"AllowZoneMove": "true", "Federation": "oidc"}, "idlefy-provision-zone-move"),
+    ],
+)
+def test_provision_defaults_match_v170_snapshot(extra, snapshot):
+    # Read-only comparison (never rewrites the file): the oidc rendering is v1.7.0's, unchanged.
+    params = {**PROVISION_PARAMS, **extra}
+    rendered = render(PROVISION, params)
+    assert _snapshot_text(policy_documents(rendered)) == (SNAPSHOTS / f"{snapshot}.json").read_text()
+    assert set(rendered) == {"ProvisionPolicy", "ProvisionRole"}
+    assert outputs(PROVISION, params) == V170_PROVISION_OUTPUTS
+
+
+def test_provision_cognito_outputs_are_unchanged():
+    # TemplateVersion keeps its shape: the app reads it the same way for both kinds of stack.
+    assert outputs(PROVISION, PROVISION_COGNITO_PARAMS) == V170_PROVISION_OUTPUTS
+
+
+def test_provision_cognito_changes_only_the_trust(provision, provision_cognito):
+    # Same fence policy, role name, limits, tags and session length; only who may assume it differs.
+    assert set(provision_cognito) == {"ProvisionPolicy", "ProvisionRole"}
+    assert provision_cognito["ProvisionPolicy"] == provision["ProvisionPolicy"]
+    oidc_role = dict(provision["ProvisionRole"]["Properties"])
+    cognito_role = dict(provision_cognito["ProvisionRole"]["Properties"])
+    assert oidc_role.pop("AssumeRolePolicyDocument") != cognito_role.pop("AssumeRolePolicyDocument")
+    assert cognito_role == oidc_role
+
+
+def test_provision_cognito_rule_requires_pool():
+    cognito = {**PROVISION_PARAMS, "Federation": "cognito"}
+    no_pool = {**cognito, "IdentityPoolId": "", "CognitoAccountId": COGNITO_ACCOUNT_ID}
+    no_account = {**cognito, "IdentityPoolId": POOL_ID, "CognitoAccountId": ""}
+    both = {**cognito, "IdentityPoolId": POOL_ID, "CognitoAccountId": COGNITO_ACCOUNT_ID}
+    oidc_empty = {**PROVISION_PARAMS, "Federation": "oidc", "IdentityPoolId": "", "CognitoAccountId": ""}
+    assert rule_violations(PROVISION, no_pool) == ["CognitoNeedsPool"]
+    assert rule_violations(PROVISION, no_account) == ["CognitoNeedsPool"]
+    assert rule_violations(PROVISION, cognito) == ["CognitoNeedsPool"]
+    assert rule_violations(PROVISION, both) == []
+    assert rule_violations(PROVISION, oidc_empty) == []
+    assert rule_violations(PROVISION, PROVISION_PARAMS) == []
+
+
+def test_snapshot_provision_cognito(provision_cognito, request):
+    assert_snapshot("idlefy-provision-cognito", policy_documents(provision_cognito), request)
 
 
 # -- renderer ----------------------------------------------------------------------------

@@ -31,6 +31,12 @@ PROVISION_PARAMS = {
     "AllowedRegions": "eu-central-1,us-east-1",
     "AllowedInstanceTypes": "m7i.large,m7i.xlarge,g6.xlarge",
 }
+PROVISION_COGNITO_PARAMS = {
+    **PROVISION_PARAMS,
+    "Federation": "cognito",
+    "IdentityPoolId": POOL_ID,
+    "CognitoAccountId": COGNITO_ACCOUNT_ID,
+}
 
 
 @pytest.fixture(scope="session")
@@ -61,6 +67,11 @@ def provision_zone_move():
     return render("idlefy-provision.yaml", {**PROVISION_PARAMS, "AllowZoneMove": "true"})
 
 
+@pytest.fixture(scope="session")
+def provision_cognito():
+    return render("idlefy-provision.yaml", PROVISION_COGNITO_PARAMS)
+
+
 def assert_snapshot(name: str, value, request):
     """Compare against tests/snapshots/<name>.json; `--snapshot-update` rewrites it."""
     path = SNAPSHOTS / f"{name}.json"
@@ -77,4 +88,5 @@ def pytest_addoption(parser):
 __all__ = [
     "policy_documents", "render", "assert_snapshot", "ORG_ID", "ORG_SUFFIX", "ISSUER_HOST",
     "POOL_ID", "COGNITO_ACCOUNT_ID", "MANAGE_PIN", "PROVISION_PIN", "MANAGE_PARAMS", "MANAGE_COGNITO_PARAMS",
+    "PROVISION_PARAMS", "PROVISION_COGNITO_PARAMS",
 ]
