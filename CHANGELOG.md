@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.9.0
+
+- `idlefy-manage.yaml`: **read whether the account is on the AWS Free plan.** New
+  `IdlefyAccountPlan` allows one read, `freetier:GetAccountPlanState`. Idlefy reads only
+  whether the account is on the AWS Free plan or a paid plan, never credits or usage.
+- Updating an existing manage stack adds only this statement. The provision template changes
+  only its version.
+- The app works with v1.8.0 and v1.9.0 stacks alike. An older stack answers `AccessDenied`,
+  and Idlefy treats that as "plan unknown".
+
 ## v1.8.0
 
 One connection flow for every AWS account, including accounts created through AWS's new

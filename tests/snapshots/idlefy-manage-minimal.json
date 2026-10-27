@@ -67,6 +67,14 @@
         "Effect": "Allow",
         "Resource": "*",
         "Sid": "IdlefyPricing"
+      },
+      {
+        "Action": [
+          "freetier:GetAccountPlanState"
+        ],
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "IdlefyAccountPlan"
       }
     ],
     "Version": "2012-10-17"

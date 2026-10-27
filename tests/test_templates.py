@@ -76,7 +76,8 @@ def test_manage_metrics_statement_is_conditional(manage, manage_no_provider_no_m
     full = manage["ManageRole"]["Properties"]["Policies"][0]["PolicyDocument"]
     minimal = manage_no_provider_no_metrics["ManageRole"]["Properties"]["Policies"][0]["PolicyDocument"]
     sids = lambda doc: [s["Sid"] for s in doc["Statement"]]
-    assert sids(full) == ["IdlefyCore", "IdlefyVMManagementLower", "IdlefyVMManagementUpper", "IdlefyPricing", "IdlefyMetrics"]
+    assert sids(full) == ["IdlefyCore", "IdlefyVMManagementLower", "IdlefyVMManagementUpper",
+                          "IdlefyPricing", "IdlefyAccountPlan", "IdlefyMetrics"]
     assert sids(minimal) == sids(full)[:-1]
 
 
@@ -142,7 +143,8 @@ def _snapshot_text(value) -> str:
     ],
 )
 def test_manage_defaults_match_v170_snapshot(extra, snapshot):
-    # Read-only comparison (never rewrites the file): the oidc rendering is v1.7.0's, unchanged.
+    # Read-only comparison (never rewrites the file): the oidc rendering equals the committed
+    # snapshot (v1.7.0's, plus the one IdlefyAccountPlan statement v1.9.0 adds).
     rendered = render(MANAGE, {**MANAGE_PARAMS, **extra})
     assert _snapshot_text(policy_documents(rendered)) == (SNAPSHOTS / f"{snapshot}.json").read_text()
     expected = {"ManageRole"} | ({"OidcProvider"} if extra.get("CreateOidcProvider", "true") == "true" else set())

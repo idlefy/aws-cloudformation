@@ -6,7 +6,7 @@ can read exactly what gets created in your account before you click.
 
 | Stack | Template | Creates | Purpose |
 |---|---|---|---|
-| `Idlefy-Manage` | `templates/idlefy-manage.yaml` | OIDC identity provider (optional; never with `Federation=cognito`) + role `IdlefyManage-<org>` | Discover and start/stop the EC2 instances you tag `Idlefy=enabled`. Cannot create, terminate or resize anything. |
+| `Idlefy-Manage` | `templates/idlefy-manage.yaml` | OIDC identity provider (optional; never with `Federation=cognito`) + role `IdlefyManage-<org>` | Discover and start/stop the EC2 instances you tag `Idlefy=enabled`. Cannot create, terminate or resize anything. Reads whether the account is on the AWS Free plan (v1.9.0). |
 | `Idlefy-Provision` | `templates/idlefy-provision.yaml` | role `IdlefyProvision-<org>` + managed policy `IdlefyProvisionPolicy-<org>` | Opt-in. Lets Idlefy create dev boxes for your organization inside a fence (below). Delete this stack to revoke provisioning; manage keeps working. |
 
 Both roles are assumed only through short-lived web-identity tokens that Idlefy issues for
