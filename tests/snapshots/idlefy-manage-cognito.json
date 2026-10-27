@@ -79,6 +79,14 @@
       },
       {
         "Action": [
+          "freetier:GetAccountPlanState"
+        ],
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "IdlefyAccountPlan"
+      },
+      {
+        "Action": [
           "cloudwatch:GetMetricData",
           "cloudwatch:ListMetrics"
         ],

@@ -770,3 +770,14 @@ def test_federation_values(template):
     federation = load_template(template)["Parameters"]["Federation"]
     assert federation["AllowedValues"] == ["oidc", "cognito"]
     assert federation["Default"] == "oidc"
+
+
+@pytest.mark.parametrize("rendering", ["manage", "manage_no_provider_no_metrics", "manage_cognito"])
+def test_manage_reads_the_account_plan_and_nothing_else_of_free_tier(rendering, request):
+    resources = request.getfixturevalue(rendering)
+    statements = resources["ManageRole"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"]
+    plan = [s for s in statements if s["Sid"] == "IdlefyAccountPlan"]
+    assert plan == [{"Sid": "IdlefyAccountPlan", "Effect": "Allow",
+                     "Action": ["freetier:GetAccountPlanState"], "Resource": "*"}]
+    freetier = [a for s in statements for a in _actions(s) if a.lower().startswith("freetier:")]
+    assert freetier == ["freetier:GetAccountPlanState"]

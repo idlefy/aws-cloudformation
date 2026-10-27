@@ -192,6 +192,11 @@ Resources:
                 Action:
                   - pricing:GetProducts
                 Resource: "*"
+              - Sid: IdlefyAccountPlan
+                Effect: Allow
+                Action:
+                  - freetier:GetAccountPlanState
+                Resource: "*"
               - !If
                 - WithMetrics
                 - Sid: IdlefyMetrics
