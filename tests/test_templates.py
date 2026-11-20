@@ -224,7 +224,8 @@ V170_PROVISION_OUTPUTS = {
     ],
 )
 def test_provision_defaults_match_v170_snapshot(extra, snapshot):
-    # Read-only comparison (never rewrites the file): the oidc rendering is v1.7.0's, unchanged.
+    # Read-only comparison (never rewrites the file): the oidc rendering equals the committed
+    # snapshot (v1.7.0's, plus the one image owner v1.10.0 adds to RunInstancesImage).
     params = {**PROVISION_PARAMS, **extra}
     rendered = render(PROVISION, params)
     assert _snapshot_text(policy_documents(rendered)) == (SNAPSHOTS / f"{snapshot}.json").read_text()
