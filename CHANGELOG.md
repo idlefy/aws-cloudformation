@@ -1,5 +1,26 @@
 # Changelog
 
+## v1.10.0
+
+- `idlefy-provision.yaml`: **images Idlefy publishes.** `RunInstancesImage` also allows images
+  owned by Idlefy's own AWS account, `995603458290`. Idlefy publishes PUBLIC dev-box images from
+  it, built in the open from `github.com/idlefy/vm-platform-aws` (the "hardened for AI agents"
+  option in the Idlefy app). Idlefy publishes them public and shares none privately with your
+  account; the role would launch one if it did. No tag is read; the app launches them by image
+  id from a list pinned in its own code and checks the owner before every launch. Idlefy encrypts
+  the disk of a box started from one at launch with your account's key, like every box. Images of
+  every other account and Marketplace images stay denied; an image of your own still needs
+  `IdlefyAttached` (v1.7.0). If your account restricts which AMIs may be launched (EC2 Allowed
+  AMIs or an SCP), add `995603458290` there too.
+- What this grants, plainly: a launch from any image that account owns. Whoever can register an
+  image there chooses the root disk of the next hardened box, so one CI role alone may publish
+  and the app launches pinned ids only. If you do not want it, do not update past v1.9.0: the app offers the
+  option only on a stack at v1.10.0 or newer and says "update your Idlefy stack" otherwise.
+- No new parameter, no new read, no new action; the fence policy grows by one list value
+  (6,038 of 6,144 characters at the largest fence). Updating an existing stack changes the fence
+  policy in place. The app works with every earlier stack as before; only the hardened option
+  needs v1.10.0.
+
 ## v1.9.0
 
 - `idlefy-manage.yaml`: **read whether the account is on the AWS Free plan.** New

@@ -39,13 +39,27 @@ see "Handing an existing machine over" below) or on an image of your own (v1.7.0
   resources that already carry the tag (`ec2:ResourceTag`).
 - Instances may only launch into a subnet that carries the tag (or one you tagged
   `IdlefyAttached=<org id>`) and with a security group that carries `IdlefyManaged`, from an
-  image owned by Canonical, Amazon or Debian; the network interface created with the instance
-  must be tagged at launch like the instance and its volume.
+  image owned by Canonical, Amazon, Debian or Idlefy (v1.10.0, below); the network interface
+  created with the instance must be tagged at launch like the instance and its volume.
 - **An image of your own account is launched only after you attach it** (v1.7.0): put the tag
   `IdlefyAttached=<org id>` on the image. A launch runs a startup script the caller chooses,
   so whoever may launch an image may read what is on it; without the tag the role cannot
   launch any image you own, a backup or a golden image included. The role cannot write the tag
-  itself. Images shared in from another account and Marketplace images are never launchable.
+  itself. Images shared in from another account (except Idlefy's, below) and Marketplace
+  images are never launchable.
+- **Images Idlefy publishes** (v1.10.0): the role may launch a public image owned by Idlefy's own
+  AWS account, `995603458290`. These are the images behind the "hardened for AI agents" dev-box
+  option: Idlefy builds them in the open (`github.com/idlefy/vm-platform-aws`), publishes them
+  public in every region where dev boxes are offered, and launches them by image id from a list
+  pinned in its own code, checking the owner before every launch. Idlefy publishes them public and
+  shares none privately with your account; the role would launch one if it did (`ec2:Owner` is the
+  image's owner, not its visibility). No tag is read. Idlefy encrypts the disk of a box started
+  from one at launch with your account's key, like every box. What this grants, plainly: a launch
+  from any image that account owns. Whoever can register an image there chooses the root disk of
+  the next hardened box, which is why one CI role alone may publish and the app launches pinned
+  ids only. If you do not want it, do not update past v1.9.0: an older stack keeps working, and the
+  app offers the option only on a stack at v1.10.0 or newer. If your account restricts which AMIs may be launched (EC2 Allowed AMIs or an
+  SCP), add `995603458290` there too.
 - **Reads are named one by one** (v1.7.0): instances, images, volumes, snapshots, networks,
   addresses, instance types and availability zones. The role cannot read launch templates or
   VPN connections, and it cannot read any attribute of any instance
@@ -211,6 +225,7 @@ plan only the Free Tier instance types launch.
 | Parameters | manage: `OrgId`, `IssuerHost`, `CreateOidcProvider`, `IncludeMetrics`; provision: `OrgId`, `IssuerHost`, `AllowedRegions`, `AllowedInstanceTypes`, `MaxVolumeGiB`, `AllowZoneMove` (v1.4.0, default `false`); both (v1.8.0): `Federation` (`oidc` or `cognito`, default `oidc`), `IdentityPoolId` (default empty, or `<region>:<uuid>`), `CognitoAccountId` (default empty, or 12 digits). Rule `CognitoNeedsPool`: with `Federation=cognito` both of the last two are required, and the stack is refused before anything is created | major (removing or renaming); minor (adding one that has a default) |
 | Trust conditions | Defaults keep the OIDC trust exactly as in v1.7.0. **`Federation=oidc`** (default): principal `arn:aws:iam::<your account>:oidc-provider/<issuer>`; `<issuer>:aud = sts.amazonaws.com`; manage `sub = <OrgId>`, provision `sub = <OrgId>:provision`. **`Federation=cognito`** (v1.8.0): principal `cognito-identity.amazonaws.com`, one statement, `Action` exactly `sts:AssumeRoleWithWebIdentity`; `StringEquals cognito-identity.amazonaws.com:aud = <IdentityPoolId>`; the pin `arn:aws:iam::<CognitoAccountId>:oidc-provider/<issuer>:OIDC:<OrgId>` (manage) or `…:OIDC:<OrgId>:provision` (provision) checked twice on `cognito-identity.amazonaws.com:amr`: `ForAnyValue:StringEquals = <pin>` (the pin must be present) and `ForAllValues:StringEquals = ["authenticated", "<issuer>", "<pin>"]` (no other entry may be). `StringEquals` only, never `StringLike` | major |
 | Fence tag | `IdlefyManaged = true` | major |
+| Image owners the role may launch from | Canonical `099720109477`, `amazon`, Debian `136693071363`, Idlefy `995603458290` (v1.10.0), and the stack's own account (attached images only; with `AllowZoneMove`, also the temporary disk copies Idlefy made) | minor (adding one); major (removing one) |
 | Provision stack output `TemplateVersion` (since v1.4.0) | the deployed version, e.g. `v1.4.0`; the app reads it to decide which actions the role supports. A stack without it is older than v1.4.0 | major |
 | `CAPABILITY_NAMED_IAM` | required (roles have fixed names); the console shows an acknowledgement checkbox | major |
 | Adding a permission statement | | minor |
