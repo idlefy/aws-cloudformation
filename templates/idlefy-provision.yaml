@@ -4,8 +4,9 @@ Description: >-
   for your organization. Every resource Idlefy creates must carry the tag IdlefyManaged=true,
   and Idlefy can only change or delete resources that carry it. Regions, instance types and
   volume size are limited to the values you set below. An image of your own is used only after
-  you tag it IdlefyAttached=<your organization id>. Delete this stack to revoke provisioning;
-  the manage role keeps working.
+  you tag it IdlefyAttached=<your organization id>. Dev boxes can also start from public images
+  Idlefy publishes from its own AWS account, 995603458290. Delete this stack to revoke
+  provisioning; the manage role keeps working.
 
 Metadata:
   Idlefy:
@@ -358,17 +359,27 @@ Resources:
             Action: ec2:RunInstances
             Resource: arn:aws:ec2:*::image/*
             Condition:
-              # Whose images may be launched: Canonical (Ubuntu), Amazon, Debian (v1.3.0) and
-              # this account's own images (v1.3.0, "custom images"). Never an image shared in
-              # from another account, and never a Marketplace image.
+              # Whose images may be launched: Canonical (Ubuntu), Amazon, Debian (v1.3.0), Idlefy
+              # (v1.10.0) and this account's own images (v1.3.0, "custom images"). Never an image
+              # shared in from any OTHER account, and never a Marketplace image; an image Idlefy's
+              # account shares with yours privately would be launchable too (Idlefy shares none).
               # v1.7.0: an image of this account only when you attached it (the tag
               # IdlefyAttached=<your Idlefy organization id> on the image) - see
               # DenyOwnImageNotAttached on the role.
+              # v1.10.0: 995603458290 is Idlefy's own AWS account. Idlefy publishes PUBLIC dev-box
+              # images from it (the "hardened for AI agents" option), built in the open from
+              # github.com/idlefy/vm-platform-aws, and shares none privately with your account;
+              # no tag is read. The Idlefy app launches them by image id from a list pinned in
+              # its own code and checks the owner before every launch. Idlefy encrypts the disk of
+              # a box started from one at launch with your account's key, like every box. What this
+              # grants, plainly: a launch from any image that account owns. A literal on purpose:
+              # the stack is deployed in YOUR account, so AWS::AccountId is you, not Idlefy.
               StringEquals:
                 ec2:Owner:
                   - "099720109477"
                   - amazon
                   - "136693071363"
+                  - "995603458290"
                   - !Ref "AWS::AccountId"
 
           # Encrypted root volumes: EC2 calls KMS on the caller's behalf with the account's

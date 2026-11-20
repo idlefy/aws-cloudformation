@@ -85,6 +85,9 @@ DESCRIBE_ACTIONS = {
     "ec2:DescribeSecurityGroups", "ec2:DescribeSnapshots", "ec2:DescribeSubnets",
     "ec2:DescribeVolumes", "ec2:DescribeVpcs",
 }
+# v1.10.0: the AWS account Idlefy publishes public dev-box images from. A literal, never
+# !Ref AWS::AccountId: the stack is deployed in the customer's account, not in this one.
+IDLEFY_IMAGE_PUBLISHER = "995603458290"
 IAM_MANAGED_POLICY_LIMIT = 6144   # non-whitespace characters
 IAM_ROLE_INLINE_LIMIT = 10240     # non-whitespace characters, all inline policies of a role
 # Read-only prefixes that legitimately have no tag condition.
@@ -392,18 +395,45 @@ def test_disks_are_gp3_and_not_above_16000_iops(role_denies):
 
 
 def test_images_limited_to_known_publishers_and_this_account(statements):
-    # Canonical, Amazon, Debian, and the account's own images (v1.3.0). Nothing shared in from
-    # another account and no Marketplace: the list is exact, not a superset.
+    # Canonical, Amazon, Debian, Idlefy (v1.10.0), and the account's own images (v1.3.0). Nothing
+    # shared in from any OTHER account and no Marketplace: the list is exact, not a superset. Note
+    # that ec2:Owner is the image's owner, not its visibility: an image Idlefy's account shared
+    # PRIVATELY with this account would be launchable too (Idlefy shares none, it publishes public).
     stmt = next(s for s in statements if s["Sid"] == "RunInstancesImage")
     assert stmt["Resource"] == "arn:aws:ec2:*::image/*"
     assert stmt["Condition"] == {
-        "StringEquals": {"ec2:Owner": ["099720109477", "amazon", "136693071363", ACCOUNT_ID]}
+        "StringEquals": {"ec2:Owner": ["099720109477", "amazon", "136693071363", IDLEFY_IMAGE_PUBLISHER, ACCOUNT_ID]}
     }
     image_allows = [
         s for s in statements
         if s["Effect"] == "Allow" and "ec2:RunInstances" in _actions(s) and any("image/" in r for r in _resources(s))
     ]
     assert [s["Sid"] for s in image_allows] == ["RunInstancesImage"]
+
+
+@pytest.mark.parametrize("rendering", ["provision", "provision_zone_move", "provision_cognito"])
+def test_idlefy_published_images_are_launchable_without_a_tag_and_nothing_else_is_opened(rendering, request):
+    # v1.10.0. Idlefy's images are PUBLIC images of another account, so from this account they are
+    # reached by ec2:Owner on the launch alone: no tag (AMI tags are not visible across accounts),
+    # no new read, no new action. The id is a quoted string (unquoted it renders as a number and
+    # IAM would never match it) and appears in exactly one statement of the two policies.
+    # DenyOwnImageNotAttached keys on the stack's own account and must not grow to the publisher,
+    # or every launch from an Idlefy image would be denied in every customer account. The stack
+    # Description names the account too: it is the first text a person reads in the console.
+    # Every provision rendering, Federation=cognito included: there the same account number is
+    # also CognitoAccountId in the trust's amr pin (v1.8.0), which is not a permission policy and
+    # is checked by test_provision_cognito_trust.
+    resources = request.getfixturevalue(rendering)
+    statements = resources["ProvisionPolicy"]["Properties"]["PolicyDocument"]["Statement"]
+    role_denies = _limits(resources)
+    owners = next(s for s in statements if s["Sid"] == "RunInstancesImage")["Condition"]["StringEquals"]["ec2:Owner"]
+    assert owners == ["099720109477", "amazon", "136693071363", IDLEFY_IMAGE_PUBLISHER, ACCOUNT_ID]
+    assert all(isinstance(o, str) for o in owners)
+    mentions = [s["Sid"] for s in [*statements, *role_denies] if IDLEFY_IMAGE_PUBLISHER in json.dumps(s)]
+    assert mentions == ["RunInstancesImage"]
+    deny = next(s for s in role_denies if s["Sid"] == "DenyOwnImageNotAttached")
+    assert deny["Condition"]["StringEquals"] == {"ec2:Owner": ACCOUNT_ID}
+    assert IDLEFY_IMAGE_PUBLISHER in load_template("idlefy-provision.yaml")["Description"]
 
 
 def test_image_lookup_reads_only_the_publishers_public_parameters(statements):
