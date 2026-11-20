@@ -8,8 +8,9 @@
   option in the Idlefy app). Idlefy publishes them public and shares none privately with your
   account; the role would launch one if it did. No tag is read; the app launches them by image
   id from a list pinned in its own code and checks the owner before every launch. Idlefy encrypts
-  the disk of a box started from one at launch with your account's key, like every box. Images of
-  every other account and Marketplace images stay denied; an image of your own still needs
+  the disk of a box started from one at launch with your account's key, like every box. The other
+  publishers stay as they were (Canonical, Amazon, Debian); images of any other account and
+  Marketplace images stay denied; an image of your own still needs
   `IdlefyAttached` (v1.7.0). If your account restricts which AMIs may be launched (EC2 Allowed
   AMIs or an SCP), add `995603458290` there too.
 - What this grants, plainly: a launch from any image that account owns. Whoever can register an
