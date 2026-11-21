@@ -1,7 +1,9 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   Idlefy manage role (template __TEMPLATE_VERSION__). Lets Idlefy discover and start/stop
-  the EC2 instances you tag with Idlefy=enabled. It cannot create, terminate or resize anything.
+  the EC2 instances you tag with Idlefy=enabled, read the configuration of the account's
+  databases, and start/stop the databases you tag the same way. It cannot create, terminate or
+  resize anything, and cannot read the data in a database.
   Access is granted only to short-lived web-identity tokens issued by Idlefy for your organization.
 
 Metadata:
@@ -101,7 +103,7 @@ Resources:
       RoleName: !Sub
         - IdlefyManage-${Suffix}
         - Suffix: !Join ["", [!Select [0, !Split ["-", !Ref OrgId]], !Select [1, !Split ["-", !Ref OrgId]]]]
-      Description: Idlefy manage tier - discover and start/stop instances tagged Idlefy=enabled.
+      Description: Idlefy manage tier - discover instances and databases; start/stop only those tagged Idlefy=enabled.
       MaxSessionDuration: 3600
       # cognito: the pool is the audience; the pin (the amr entry Cognito adds for a token from
       # this org's issuer) must be present, and no amr entry other than authenticated, the
@@ -197,6 +199,41 @@ Resources:
                 Action:
                   - freetier:GetAccountPlanState
                 Resource: "*"
+              - Sid: IdlefyDatabaseRead
+                Effect: Allow
+                Action:
+                  - rds:DescribeDBInstances
+                  - rds:DescribeDBClusters
+                Resource: "*"
+              - Sid: IdlefyDatabaseTags
+                Effect: Allow
+                Action:
+                  - rds:ListTagsForResource
+                Resource:
+                  - !Sub arn:aws:rds:*:${AWS::AccountId}:db:*
+                  - !Sub arn:aws:rds:*:${AWS::AccountId}:cluster:*
+              - Sid: IdlefyDatabaseManagementLower
+                Effect: Allow
+                Action:
+                  - rds:StartDBInstance
+                  - rds:StopDBInstance
+                  - rds:StartDBCluster
+                  - rds:StopDBCluster
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:ResourceTag/idlefy: enabled
+              - Sid: IdlefyDatabaseManagementUpper
+                Effect: Allow
+                Action:
+                  - rds:StartDBInstance
+                  - rds:StopDBInstance
+                  - rds:StartDBCluster
+                  - rds:StopDBCluster
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:ResourceTag/Idlefy: enabled
               - !If
                 - WithMetrics
                 - Sid: IdlefyMetrics

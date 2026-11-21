@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.11.0
+
+- `idlefy-manage.yaml`: **start and stop the RDS and DocumentDB databases you tag.** New
+  statements: `IdlefyDatabaseRead` (`rds:DescribeDBInstances`, `rds:DescribeDBClusters`),
+  `IdlefyDatabaseTags` (`rds:ListTagsForResource` on this account's databases and clusters) and
+  `IdlefyDatabaseManagementLower` / `IdlefyDatabaseManagementUpper` (`rds:StartDBInstance`,
+  `rds:StopDBInstance`, `rds:StartDBCluster`, `rds:StopDBCluster`), allowed only on a database
+  tagged `idlefy=enabled` or `Idlefy=enabled`.
+- The reads cover the configuration of every database the RDS API lists in the account: RDS,
+  Aurora, DocumentDB and Neptune (README, "Databases"). Idlefy itself lists and manages RDS,
+  Aurora and DocumentDB only; a Neptune cluster tagged the same way could also be started and
+  stopped by the role. The role cannot read data or passwords or connect, and has no
+  permission to create, delete, modify or tag a database.
+- The role and stack descriptions mention databases. Updating an existing manage stack changes
+  the role's policy and description in place; nothing is replaced. The provision template
+  changes only its version.
+- The app works with earlier stacks as before; only databases need v1.11.0.
+
 ## v1.10.0
 
 - `idlefy-provision.yaml`: **images Idlefy publishes.** `RunInstancesImage` also allows images
