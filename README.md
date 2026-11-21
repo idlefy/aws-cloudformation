@@ -6,7 +6,7 @@ can read exactly what gets created in your account before you click.
 
 | Stack | Template | Creates | Purpose |
 |---|---|---|---|
-| `Idlefy-Manage` | `templates/idlefy-manage.yaml` | OIDC identity provider (optional; never with `Federation=cognito`) + role `IdlefyManage-<org>` | Discover and start/stop the EC2 instances you tag `Idlefy=enabled`. Cannot create, terminate or resize anything. Reads whether the account is on the AWS Free plan (v1.9.0). |
+| `Idlefy-Manage` | `templates/idlefy-manage.yaml` | OIDC identity provider (optional; never with `Federation=cognito`) + role `IdlefyManage-<org>` | Discover and start/stop the EC2 instances you tag `Idlefy=enabled`. Read the configuration of the account's databases, and start/stop the ones you tag the same way (v1.11.0, see "Databases"). Cannot create, terminate or resize anything. Reads whether the account is on the AWS Free plan (v1.9.0). |
 | `Idlefy-Provision` | `templates/idlefy-provision.yaml` | role `IdlefyProvision-<org>` + managed policy `IdlefyProvisionPolicy-<org>` | Opt-in. Lets Idlefy create dev boxes for your organization inside a fence (below). Delete this stack to revoke provisioning; manage keeps working. |
 
 Both roles are assumed only through short-lived web-identity tokens that Idlefy issues for
@@ -21,6 +21,41 @@ no identity provider in your account. Both trusts are pinned to your organizatio
 
 Published templates: `https://idlefy-cfn-templates.s3.us-east-1.amazonaws.com/cfn/<version>/<template>.yaml`.
 The app always links to an exact version, never to `cfn/latest/`.
+
+## Databases (v1.11.0)
+
+The manage role can:
+
+- read the configuration of every database the RDS API lists in the account (RDS, Aurora,
+  DocumentDB and Neptune) with `rds:DescribeDBInstances` and `rds:DescribeDBClusters`. That
+  covers identifiers, endpoints, engine, master user name, network and security group ids, KMS
+  key id, the ARN of the secret that holds the master password, and tags. AWS cannot limit
+  these two calls by tag. Tags are also read with `rds:ListTagsForResource`, only on databases
+  and clusters of this account;
+- start and stop a database instance or cluster (`rds:StartDBInstance`, `rds:StopDBInstance`,
+  `rds:StartDBCluster`, `rds:StopDBCluster`) only when it carries `idlefy=enabled` or
+  `Idlefy=enabled`. AWS ignores the case of the tag key; the value must be exactly `enabled`.
+  For Aurora and DocumentDB the tag on the cluster decides.
+
+Idlefy itself lists and manages RDS, Aurora and DocumentDB databases only. Neptune uses the same
+calls, so a Neptune cluster tagged the same way could also be started and stopped by the role.
+
+The role cannot read the data in a database or its password. It gets no database credentials:
+it has no `rds-db:connect` (IAM database authentication) and no Secrets Manager access. It has no permission to create, delete, modify
+or tag a database, and none to create a snapshot (`rds:CreateDBSnapshot`); Idlefy never asks
+for a snapshot when it stops a database. Because the role cannot tag, it cannot widen its own
+reach.
+
+What this means:
+
+- Starting a database starts its billing for instance hours. Storage and backups are billed
+  whether it runs or not.
+- Anyone in your account who can tag a database can hand it to Idlefy. To control that, limit
+  `rds:AddTagsToResource` with the `aws:TagKeys` condition key.
+- Updating an existing manage stack changes the role's policy and its description in place;
+  nothing is replaced. In the CloudFormation console choose "Replace existing template", paste
+  the v1.11.0 URL and keep the parameters as they are. An older stack keeps working for EC2;
+  only databases need v1.11.0.
 
 ## The provision fence
 

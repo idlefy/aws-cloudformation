@@ -76,9 +76,24 @@ def test_manage_metrics_statement_is_conditional(manage, manage_no_provider_no_m
     full = manage["ManageRole"]["Properties"]["Policies"][0]["PolicyDocument"]
     minimal = manage_no_provider_no_metrics["ManageRole"]["Properties"]["Policies"][0]["PolicyDocument"]
     sids = lambda doc: [s["Sid"] for s in doc["Statement"]]
-    assert sids(full) == ["IdlefyCore", "IdlefyVMManagementLower", "IdlefyVMManagementUpper",
-                          "IdlefyPricing", "IdlefyAccountPlan", "IdlefyMetrics"]
+    assert sids(full) == ["IdlefyCore", "IdlefyVMManagementLower", "IdlefyVMManagementUpper", "IdlefyPricing",
+                          "IdlefyAccountPlan", "IdlefyDatabaseRead", "IdlefyDatabaseTags",
+                          "IdlefyDatabaseManagementLower", "IdlefyDatabaseManagementUpper", "IdlefyMetrics"]
     assert sids(minimal) == sids(full)[:-1]
+
+
+def test_manage_descriptions(manage):
+    # Both update in place; the role's is what a reviewer sees in the IAM console.
+    assert load_template(MANAGE)["Description"] == (
+        "Idlefy manage role (template __TEMPLATE_VERSION__). Lets Idlefy discover and start/stop"
+        " the EC2 instances you tag with Idlefy=enabled, read the configuration of the account's"
+        " databases, and start/stop the databases you tag the same way. It cannot create, terminate or"
+        " resize anything, and cannot read the data in a database."
+        " Access is granted only to short-lived web-identity tokens issued by Idlefy for your organization."
+    )
+    assert manage["ManageRole"]["Properties"]["Description"] == (
+        "Idlefy manage tier - discover instances and databases; start/stop only those tagged Idlefy=enabled."
+    )
 
 
 def test_session_durations(manage, provision):
@@ -144,7 +159,7 @@ def _snapshot_text(value) -> str:
 )
 def test_manage_defaults_match_v170_snapshot(extra, snapshot):
     # Read-only comparison (never rewrites the file): the oidc rendering equals the committed
-    # snapshot (v1.7.0's, plus the one IdlefyAccountPlan statement v1.9.0 adds).
+    # snapshot (v1.7.0's, plus IdlefyAccountPlan (v1.9.0) and the database statements (v1.11.0)).
     rendered = render(MANAGE, {**MANAGE_PARAMS, **extra})
     assert _snapshot_text(policy_documents(rendered)) == (SNAPSHOTS / f"{snapshot}.json").read_text()
     expected = {"ManageRole"} | ({"OidcProvider"} if extra.get("CreateOidcProvider", "true") == "true" else set())

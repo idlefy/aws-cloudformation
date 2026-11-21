@@ -87,6 +87,58 @@
       },
       {
         "Action": [
+          "rds:DescribeDBInstances",
+          "rds:DescribeDBClusters"
+        ],
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "IdlefyDatabaseRead"
+      },
+      {
+        "Action": [
+          "rds:ListTagsForResource"
+        ],
+        "Effect": "Allow",
+        "Resource": [
+          "arn:aws:rds:*:123456789012:db:*",
+          "arn:aws:rds:*:123456789012:cluster:*"
+        ],
+        "Sid": "IdlefyDatabaseTags"
+      },
+      {
+        "Action": [
+          "rds:StartDBInstance",
+          "rds:StopDBInstance",
+          "rds:StartDBCluster",
+          "rds:StopDBCluster"
+        ],
+        "Condition": {
+          "StringEquals": {
+            "aws:ResourceTag/idlefy": "enabled"
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "IdlefyDatabaseManagementLower"
+      },
+      {
+        "Action": [
+          "rds:StartDBInstance",
+          "rds:StopDBInstance",
+          "rds:StartDBCluster",
+          "rds:StopDBCluster"
+        ],
+        "Condition": {
+          "StringEquals": {
+            "aws:ResourceTag/Idlefy": "enabled"
+          }
+        },
+        "Effect": "Allow",
+        "Resource": "*",
+        "Sid": "IdlefyDatabaseManagementUpper"
+      },
+      {
+        "Action": [
           "cloudwatch:GetMetricData",
           "cloudwatch:ListMetrics"
         ],

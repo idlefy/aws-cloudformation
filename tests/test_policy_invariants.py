@@ -29,6 +29,7 @@ from render import (  # tests/ is on sys.path (conftest already imports from ren
     STACK_NAME,
     TEMPLATES,
     load_template,
+    policy_documents,
 )
 
 FENCE_TAG = "IdlefyManaged"
@@ -524,7 +525,8 @@ def test_fence_tag_key_is_distinct_from_manage_tag(statements, manage):
         for op in s.get("Condition", {}).values()
         for k in op
     }
-    assert manage_keys == {"ec2:ResourceTag/idlefy", "ec2:ResourceTag/Idlefy"}
+    assert manage_keys == {"ec2:ResourceTag/idlefy", "ec2:ResourceTag/Idlefy",
+                           "aws:ResourceTag/idlefy", "aws:ResourceTag/Idlefy"}
     assert RESOURCE_TAG not in manage_keys
 
 
@@ -811,3 +813,96 @@ def test_manage_reads_the_account_plan_and_nothing_else_of_free_tier(rendering, 
                      "Action": ["freetier:GetAccountPlanState"], "Resource": "*"}]
     freetier = [a for s in statements for a in _actions(s) if a.lower().startswith("freetier:")]
     assert freetier == ["freetier:GetAccountPlanState"]
+
+
+# -- databases, manage (v1.11.0) ---------------------------------------------------------
+
+MANAGE_RENDERINGS = ["manage", "manage_no_provider_no_metrics", "manage_cognito"]
+ALL_RENDERINGS = MANAGE_RENDERINGS + ["provision", "provision_zone_move", "provision_cognito"]
+DB_WRITES = {"rds:StartDBInstance", "rds:StopDBInstance", "rds:StartDBCluster", "rds:StopDBCluster"}
+DB_ACTIONS = DB_WRITES | {"rds:DescribeDBInstances", "rds:DescribeDBClusters", "rds:ListTagsForResource"}
+DB_FORBIDDEN = {"rds:AddTagsToResource", "rds:RemoveTagsFromResource", "tag:*", "rds-db:*", "secretsmanager:*", "rds:*"}
+# Tagging, connecting, the Data API, secrets and Performance Insights (which shows query text).
+DB_FORBIDDEN_PREFIXES = ("tag:", "rds-db:", "secretsmanager:", "rds-data:", "pi:")
+DB_TAG_KEYS = ["aws:ResourceTag/Idlefy", "aws:ResourceTag/idlefy"]
+
+
+def _manage_policy(resources):
+    (policy,) = resources["ManageRole"]["Properties"]["Policies"]
+    assert policy["PolicyName"] == "IdlefyPolicy"
+    return policy["PolicyDocument"]
+
+
+def _permission_statements(resources):
+    """Every statement of every permission policy in a rendering (trust policies excluded)."""
+    return [
+        s
+        for path, doc in policy_documents(resources).items()
+        if not path.endswith(".AssumeRolePolicyDocument")
+        for s in doc["Statement"]
+    ]
+
+
+@pytest.mark.parametrize("rendering", MANAGE_RENDERINGS)
+def test_every_database_start_and_stop_is_tag_scoped(rendering, request):
+    # Two statements on purpose: one statement with both keys would AND them. Resource "*" with
+    # the tag condition is the whole scope; the value is exactly "enabled".
+    statements = _manage_policy(request.getfixturevalue(rendering))["Statement"]
+    writes = [
+        s for s in statements
+        if s["Effect"] == "Allow" and any(a.lower().startswith(("rds:start", "rds:stop")) for a in _actions(s))
+    ]
+    keys = []
+    for s in writes:
+        assert set(s) == {"Sid", "Effect", "Action", "Resource", "Condition"}, s["Sid"]
+        assert sorted(_actions(s)) == sorted(DB_WRITES), s["Sid"]
+        assert s["Resource"] == "*", s["Sid"]
+        assert list(s["Condition"]) == ["StringEquals"], s["Sid"]
+        (key,) = s["Condition"]["StringEquals"]
+        assert s["Condition"] == {"StringEquals": {key: "enabled"}}, s["Sid"]
+        keys.append(key)
+    assert sorted(keys) == DB_TAG_KEYS
+
+
+@pytest.mark.parametrize("rendering", MANAGE_RENDERINGS)
+def test_database_reads_are_not_tag_conditioned(rendering, request):
+    # Listing must see a database whatever its tags: the app reads the tag itself before it
+    # offers, starts or stops one.
+    statements = {s["Sid"]: s for s in _manage_policy(request.getfixturevalue(rendering))["Statement"]}
+    assert statements["IdlefyDatabaseRead"] == {
+        "Sid": "IdlefyDatabaseRead",
+        "Effect": "Allow",
+        "Action": ["rds:DescribeDBInstances", "rds:DescribeDBClusters"],
+        "Resource": "*",
+    }
+    assert statements["IdlefyDatabaseTags"] == {
+        "Sid": "IdlefyDatabaseTags",
+        "Effect": "Allow",
+        "Action": ["rds:ListTagsForResource"],
+        "Resource": [f"arn:aws:rds:*:{ACCOUNT_ID}:db:*", f"arn:aws:rds:*:{ACCOUNT_ID}:cluster:*"],
+    }
+
+
+@pytest.mark.parametrize("rendering", ALL_RENDERINGS)
+def test_no_template_can_tag_a_database_or_reach_its_data(rendering, request):
+    # Because neither role can tag a database, neither can widen its own reach; neither can
+    # connect, read a secret, use the Data API or read Performance Insights.
+    allowed = [
+        a for s in _permission_statements(request.getfixturevalue(rendering)) if s["Effect"] == "Allow"
+        for a in _actions(s)
+    ]
+    for a in allowed:
+        assert a not in DB_FORBIDDEN, a
+        assert not a.lower().startswith(DB_FORBIDDEN_PREFIXES), a
+    rds = {a for a in allowed if a.lower().startswith("rds:")}
+    assert not [a for a in rds if "*" in a or "?" in a]
+    assert rds == (DB_ACTIONS if rendering in MANAGE_RENDERINGS else set())
+
+
+@pytest.mark.parametrize("rendering", MANAGE_RENDERINGS)
+def test_the_manage_inline_policy_fits_the_role_limit(rendering, request):
+    # The role has one inline policy; IAM caps all of a role's inline policies together.
+    resources = request.getfixturevalue(rendering)
+    assert len(resources["ManageRole"]["Properties"]["Policies"]) == 1
+    document = _manage_policy(resources)
+    assert _size(document) <= IAM_ROLE_INLINE_LIMIT, _size(document)
