@@ -34,14 +34,14 @@ The manage role can:
   and clusters of this account;
 - start and stop a database instance or cluster (`rds:StartDBInstance`, `rds:StopDBInstance`,
   `rds:StartDBCluster`, `rds:StopDBCluster`) only when it carries `idlefy=enabled` or
-  `Idlefy=enabled`. The value must be exactly `enabled`. For Aurora and DocumentDB the tag on the
-  cluster decides.
+  `Idlefy=enabled`. AWS ignores the case of the tag key; the value must be exactly `enabled`.
+  For Aurora and DocumentDB the tag on the cluster decides.
 
 Idlefy itself lists and manages RDS, Aurora and DocumentDB databases only. Neptune uses the same
 calls, so a Neptune cluster tagged the same way could also be started and stopped by the role.
 
-The role cannot read the data in a database or its password, and cannot connect to one: it has
-no `rds-db:connect` and no Secrets Manager access. It has no permission to create, delete, modify
+The role cannot read the data in a database or its password. It gets no database credentials:
+it has no `rds-db:connect` (IAM database authentication) and no Secrets Manager access. It has no permission to create, delete, modify
 or tag a database, and none to create a snapshot (`rds:CreateDBSnapshot`); Idlefy never asks
 for a snapshot when it stops a database. Because the role cannot tag, it cannot widen its own
 reach.
